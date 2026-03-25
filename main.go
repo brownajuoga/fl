@@ -27,11 +27,7 @@ import (
 //go:embed templates/*.html templates/admin/*.html static/css/*.css static/js/*.js
 var appFS embed.FS
 
-const (
-	defaultAdminEmail    = "admin@fussball.local"
-	defaultAdminPassword = "admin123"
-	sessionCookieName    = "fussball_session"
-)
+const sessionCookieName = "fussball_session"
 
 type App struct {
 	db        *sql.DB
@@ -145,8 +141,6 @@ type TemplateData struct {
 	Flash         string
 	Authenticated bool
 	CurrentUser   string
-	DefaultAdmin  string
-	DefaultPass   string
 
 	UpcomingGames  []GameView
 	RecentResults  []GameView
@@ -230,6 +224,12 @@ func newApp(dbPath string) (*App, error) {
 		return nil, err
 	}
 	if err := app.seedData(); err != nil {
+		return nil, err
+	}
+	if err := app.cleanupOrphanedAdminReferences(); err != nil {
+		return nil, err
+	}
+	if err := app.cleanupLegacyDefaultAdmin(); err != nil {
 		return nil, err
 	}
 
@@ -455,9 +455,24 @@ func (app *App) registerPage(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		hasApprovedAdmin, err := app.hasApprovedAdmin()
+		if err != nil {
+			app.serverError(w, err)
+			return
+		}
+
+		isAdmin := 0
+		adminStatus := "pending"
+		flash := "/register?flash=Registration+received.+Wait+for+an+existing+admin+to+approve+your+account"
+		if !hasApprovedAdmin {
+			isAdmin = 1
+			adminStatus = "approved"
+			flash = "/login?flash=Your+account+is+the+first+admin.+Please+log+in"
+		}
+
 		result, err := app.db.Exec(
-			`INSERT INTO players (name, email, is_admin, admin_status, password_hash) VALUES (?, ?, 0, 'pending', ?)`,
-			name, email, string(hash),
+			`INSERT INTO players (name, email, is_admin, admin_status, password_hash) VALUES (?, ?, ?, ?, ?)`,
+			name, email, isAdmin, adminStatus, string(hash),
 		)
 		if err != nil {
 			http.Redirect(w, r, "/register?flash=That+email+is+already+registered", http.StatusSeeOther)
@@ -465,8 +480,14 @@ func (app *App) registerPage(w http.ResponseWriter, r *http.Request) {
 		}
 
 		playerID, _ := result.LastInsertId()
-		app.logAdminAction(int(playerID), "requested admin approval", "player", int(playerID), fmt.Sprintf("Registered pending admin %q with email %s", name, email))
-		http.Redirect(w, r, "/register?flash=Registration+received.+Wait+for+an+existing+admin+to+approve+your+account", http.StatusSeeOther)
+		action := "requested admin approval"
+		details := fmt.Sprintf("Registered pending admin %q with email %s", name, email)
+		if isAdmin == 1 {
+			action = "bootstrapped first admin"
+			details = fmt.Sprintf("Registered initial admin %q with email %s", name, email)
+		}
+		app.logAdminAction(int(playerID), action, "player", int(playerID), details)
+		http.Redirect(w, r, flash, http.StatusSeeOther)
 	default:
 		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
 	}
@@ -832,6 +853,10 @@ func (app *App) deletePlayer(w http.ResponseWriter, r *http.Request) {
 		app.serverError(w, err)
 		return
 	}
+	if _, err := tx.Exec(`UPDATE players SET approved_by = NULL WHERE approved_by = ?`, playerID); err != nil {
+		app.serverError(w, err)
+		return
+	}
 	if _, err := tx.Exec(`DELETE FROM players WHERE id = ?`, playerID); err != nil {
 		app.serverError(w, err)
 		return
@@ -923,8 +948,6 @@ func (app *App) baseData(r *http.Request, title, page string) TemplateData {
 		CurrentPath:  r.URL.Path,
 		Year:         time.Now().Year(),
 		Flash:        r.URL.Query().Get("flash"),
-		DefaultAdmin: defaultAdminEmail,
-		DefaultPass:  defaultAdminPassword,
 	}
 
 	if session, ok := app.currentSession(r); ok {
@@ -1169,11 +1192,6 @@ func (app *App) seedData() error {
 	}
 	rows.Close()
 
-	adminHash, err := bcrypt.GenerateFromPassword([]byte(defaultAdminPassword), bcrypt.DefaultCost)
-	if err != nil {
-		return err
-	}
-
 	playerSeed := []struct {
 		Name     string
 		Email    string
@@ -1181,7 +1199,6 @@ func (app *App) seedData() error {
 		Admin    bool
 		Password string
 	}{
-		{"Mila Coach", defaultAdminEmail, "Red Lions", true, defaultAdminPassword},
 		{"Ari Swift", "ari@fussball.local", "Red Lions", false, "player123"},
 		{"Nora Pace", "nora@fussball.local", "Blue Rockets", false, "player123"},
 		{"Leo Kane", "leo@fussball.local", "Blue Rockets", false, "player123"},
@@ -1193,12 +1210,9 @@ func (app *App) seedData() error {
 
 	playerIDs := make(map[string]int)
 	for _, p := range playerSeed {
-		hash := adminHash
-		if p.Password != defaultAdminPassword {
-			hash, err = bcrypt.GenerateFromPassword([]byte(p.Password), bcrypt.DefaultCost)
-			if err != nil {
-				return err
-			}
+		hash, err := bcrypt.GenerateFromPassword([]byte(p.Password), bcrypt.DefaultCost)
+		if err != nil {
+			return err
 		}
 		adminStatus := "none"
 		if p.Admin {
@@ -1508,7 +1522,7 @@ func (app *App) getRules() (string, error) {
 
 func (app *App) listAdminLogs(limit int) ([]AdminLog, error) {
 	query := `
-		SELECT l.id, p.name, l.action, l.target_type, l.details, COALESCE(l.created_at, '')
+		SELECT l.id, COALESCE(p.name, 'Deleted admin'), l.action, l.target_type, l.details, COALESCE(l.created_at, '')
 		FROM admin_logs l
 		LEFT JOIN players p ON p.id = l.admin_id
 		ORDER BY l.created_at DESC, l.id DESC
@@ -1715,6 +1729,51 @@ func nullableInt(v int) any {
 		return nil
 	}
 	return v
+}
+
+func (app *App) hasApprovedAdmin() (bool, error) {
+	var count int
+	if err := app.db.QueryRow(`SELECT COUNT(*) FROM players WHERE is_admin = 1 AND COALESCE(admin_status, 'none') = 'approved'`).Scan(&count); err != nil {
+		return false, fmt.Errorf("count approved admins: %w", err)
+	}
+	return count > 0, nil
+}
+
+func (app *App) cleanupOrphanedAdminReferences() error {
+	if _, err := app.db.Exec(`
+		UPDATE players
+		SET approved_by = NULL
+		WHERE approved_by IS NOT NULL
+		  AND NOT EXISTS (
+			SELECT 1
+			FROM players approver
+			WHERE approver.id = players.approved_by
+		  )
+	`); err != nil {
+		return fmt.Errorf("clear orphaned admin approvals: %w", err)
+	}
+	return nil
+}
+
+func (app *App) cleanupLegacyDefaultAdmin() error {
+	var approvedNonLegacy int
+	if err := app.db.QueryRow(`
+		SELECT COUNT(*)
+		FROM players
+		WHERE is_admin = 1
+		  AND COALESCE(admin_status, 'none') = 'approved'
+		  AND lower(email) <> 'admin@fussball.local'
+	`).Scan(&approvedNonLegacy); err != nil {
+		return fmt.Errorf("count non-legacy admins: %w", err)
+	}
+	if approvedNonLegacy == 0 {
+		return nil
+	}
+
+	if _, err := app.db.Exec(`DELETE FROM players WHERE lower(email) = 'admin@fussball.local'`); err != nil {
+		return fmt.Errorf("delete legacy default admin: %w", err)
+	}
+	return nil
 }
 
 func envOrDefault(key, fallback string) string {

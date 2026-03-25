@@ -1,0 +1,46 @@
+{{define "standings"}}
+<section class="page-head">
+    <p class="eyebrow">Standings</p>
+    <h1>League Table</h1>
+    <p>Wins are worth 3 points, draws are worth 1, and goal difference breaks ties.</p>
+</section>
+
+<section class="card">
+    <div class="table-wrap">
+        <table>
+            <thead>
+                <tr>
+                    <th>#</th>
+                    <th>Team</th>
+                    <th>Played</th>
+                    <th>Wins</th>
+                    <th>Draws</th>
+                    <th>Losses</th>
+                    <th>GF</th>
+                    <th>GA</th>
+                    <th>GD</th>
+                    <th>Points</th>
+                    <th>Win %</th>
+                </tr>
+            </thead>
+            <tbody>
+                {{range $index, $standing := .Standings}}
+                <tr>
+                    <td>{{add1 $index}}</td>
+                    <td>{{$standing.Name}}</td>
+                    <td>{{$standing.GamesPlayed}}</td>
+                    <td>{{$standing.Wins}}</td>
+                    <td>{{$standing.Draws}}</td>
+                    <td>{{$standing.Losses}}</td>
+                    <td>{{$standing.GoalsFor}}</td>
+                    <td>{{$standing.GoalsAgainst}}</td>
+                    <td>{{$standing.GoalDiff}}</td>
+                    <td><strong>{{$standing.Points}}</strong></td>
+                    <td>{{$standing.WinPercentage}}</td>
+                </tr>
+                {{end}}
+            </tbody>
+        </table>
+    </div>
+</section>
+{{end}}

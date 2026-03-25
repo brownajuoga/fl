@@ -1,0 +1,26 @@
+{{define "login"}}
+<section class="auth-wrap">
+    <div class="card auth-card">
+        <p class="eyebrow">Admin Access</p>
+        <h1>Sign in to manage the league</h1>
+        <p class="muted">Default seeded admin credentials are preloaded so you can start right away.</p>
+
+        <form class="stack" method="post" action="/login">
+            <label>
+                <span>Email</span>
+                <input type="email" name="email" placeholder="admin@fussball.local" required>
+            </label>
+            <label>
+                <span>Password</span>
+                <input type="password" name="password" placeholder="admin123" required>
+            </label>
+            <button class="button" type="submit">Login</button>
+        </form>
+
+        <div class="credentials">
+            <p><strong>Email:</strong> {{.DefaultAdmin}}</p>
+            <p><strong>Password:</strong> {{.DefaultPass}}</p>
+        </div>
+    </div>
+</section>
+{{end}}

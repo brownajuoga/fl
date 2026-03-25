@@ -1,0 +1,127 @@
+{{define "index"}}
+<section class="hero">
+    <div>
+        <p class="eyebrow">League Central</p>
+        <h1>Run your fussball season from one dashboard.</h1>
+        <p class="lede">Track fixtures, update results, keep the table fresh, and give every team a polished home online.</p>
+        <div class="hero-actions">
+            <a class="button" href="/schedule">View fixtures</a>
+            <a class="button button-secondary" href="/standings">See standings</a>
+        </div>
+    </div>
+    <div class="hero-panel">
+        <p class="panel-label">Next Kickoff</p>
+        {{if .UpcomingGames}}
+        {{with index .UpcomingGames 0}}
+        <h2>{{.Team1Name}} vs {{.Team2Name}}</h2>
+        <p>{{gameLabel .GameType}} match</p>
+        <p>{{.ScheduledAt}}</p>
+        <p class="muted">{{.PlayableDescription}}</p>
+        {{end}}
+        {{else}}
+        <h2>No game scheduled</h2>
+        <p>Add one from the admin dashboard.</p>
+        {{end}}
+    </div>
+</section>
+
+<section class="section-grid">
+    <div class="card">
+        <div class="section-heading">
+            <h2>Upcoming Games</h2>
+            <a href="/schedule">Full schedule</a>
+        </div>
+        <div class="stack">
+            {{range .UpcomingGames}}
+            <article class="match-card">
+                <div class="match-top">
+                    <span class="{{badgeClass .Status}}">{{.Status}}</span>
+                    <span>{{gameLabel .GameType}}</span>
+                </div>
+                <h3>{{.Team1Name}} vs {{.Team2Name}}</h3>
+                <p>{{.ScheduledAt}}</p>
+                <p class="muted">{{.PlayableDescription}}</p>
+            </article>
+            {{else}}
+            <p class="empty">No upcoming games yet.</p>
+            {{end}}
+        </div>
+    </div>
+
+    <div class="card">
+        <div class="section-heading">
+            <h2>Latest Results</h2>
+            <a href="/results">All results</a>
+        </div>
+        <div class="table-wrap">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Game</th>
+                        <th>Score</th>
+                        <th>Played</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {{range .RecentResults}}
+                    <tr>
+                        <td>{{.Team1Name}} vs {{.Team2Name}}</td>
+                        <td class="score">{{.Team1Score}} - {{.Team2Score}}</td>
+                        <td>{{.PlayedAt}}</td>
+                    </tr>
+                    {{else}}
+                    <tr>
+                        <td colspan="3">Results will show here after the first matches are played.</td>
+                    </tr>
+                    {{end}}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</section>
+
+<section class="card">
+    <div class="section-heading">
+        <h2>Table Snapshot</h2>
+        <a href="/standings">Complete standings</a>
+    </div>
+    <div class="table-wrap">
+        <table>
+            <thead>
+                <tr>
+                    <th>#</th>
+                    <th>Team</th>
+                    <th>P</th>
+                    <th>W</th>
+                    <th>D</th>
+                    <th>L</th>
+                    <th>GF</th>
+                    <th>GA</th>
+                    <th>GD</th>
+                    <th>Pts</th>
+                </tr>
+            </thead>
+            <tbody>
+                {{range $index, $standing := .Standings}}
+                <tr>
+                    <td>{{add1 $index}}</td>
+                    <td>{{$standing.Name}}</td>
+                    <td>{{$standing.GamesPlayed}}</td>
+                    <td>{{$standing.Wins}}</td>
+                    <td>{{$standing.Draws}}</td>
+                    <td>{{$standing.Losses}}</td>
+                    <td>{{$standing.GoalsFor}}</td>
+                    <td>{{$standing.GoalsAgainst}}</td>
+                    <td>{{$standing.GoalDiff}}</td>
+                    <td>{{$standing.Points}}</td>
+                </tr>
+                {{else}}
+                <tr>
+                    <td colspan="10">No standings available.</td>
+                </tr>
+                {{end}}
+            </tbody>
+        </table>
+    </div>
+</section>
+{{end}}

@@ -1,0 +1,198 @@
+{{define "admin_dashboard"}}
+<section class="page-head">
+    <p class="eyebrow">Admin Dashboard</p>
+    <h1>Manage teams, players, fixtures, and rules</h1>
+    <p>Signed in as {{.CurrentUser}}. Use the forms below to keep the league moving.</p>
+</section>
+
+<section class="stats-grid">
+    <article class="card stat-card">
+        <p class="stat-label">Teams</p>
+        <h2>{{len .Dashboard.Teams}}</h2>
+    </article>
+    <article class="card stat-card">
+        <p class="stat-label">Players</p>
+        <h2>{{len .Dashboard.Players}}</h2>
+    </article>
+    <article class="card stat-card">
+        <p class="stat-label">Tracked Games</p>
+        <h2>{{len .Dashboard.Games}}</h2>
+    </article>
+    <article class="card stat-card">
+        <p class="stat-label">Leader</p>
+        {{with index .Dashboard.Standings 0}}
+        <h2>{{.Name}}</h2>
+        <p>{{.Points}} points</p>
+        {{else}}
+        <h2>None</h2>
+        {{end}}
+    </article>
+</section>
+
+<section class="admin-grid">
+    <article class="card admin-card">
+        <h2>Create Team</h2>
+        <form class="stack" method="post" action="/admin/teams">
+            <label>
+                <span>Team name</span>
+                <input type="text" name="name" placeholder="River Strikers" required>
+            </label>
+            <button class="button" type="submit">Add team</button>
+        </form>
+    </article>
+
+    <article class="card admin-card">
+        <h2>Create Player</h2>
+        <form class="stack" method="post" action="/admin/players">
+            <label>
+                <span>Player name</span>
+                <input type="text" name="name" required>
+            </label>
+            <label>
+                <span>Email</span>
+                <input type="email" name="email" required>
+            </label>
+            <label>
+                <span>Team</span>
+                <select name="team_id" required>
+                    <option value="">Choose a team</option>
+                    {{range .Dashboard.Teams}}
+                    <option value="{{.ID}}">{{.Name}}</option>
+                    {{end}}
+                </select>
+            </label>
+            <label>
+                <span>Password</span>
+                <input type="text" name="password" placeholder="player123">
+            </label>
+            <label class="checkbox">
+                <input type="checkbox" name="is_admin">
+                <span>Grant admin access</span>
+            </label>
+            <button class="button" type="submit">Add player</button>
+        </form>
+    </article>
+    
+    <article class="card admin-card admin-card-wide">
+        <h2>Create Game</h2>
+        <form class="stack" method="post" action="/admin/games" data-game-form>
+            <div class="form-grid">
+                <label>
+                    <span>Game type</span>
+                    <select name="game_type" data-game-type required>
+                        <option value="singles">Singles</option>
+                        <option value="doubles">Doubles</option>
+                    </select>
+                </label>
+                <label>
+                    <span>Kickoff</span>
+                    <input type="datetime-local" name="scheduled_date" required>
+                </label>
+                <label>
+                    <span>Team 1</span>
+                    <select name="team1_id" required>
+                        <option value="">Choose team</option>
+                        {{range .Dashboard.Teams}}
+                        <option value="{{.ID}}">{{.Name}}</option>
+                        {{end}}
+                    </select>
+                </label>
+                <label>
+                    <span>Team 2</span>
+                    <select name="team2_id" required>
+                        <option value="">Choose team</option>
+                        {{range .Dashboard.Teams}}
+                        <option value="{{.ID}}">{{.Name}}</option>
+                        {{end}}
+                    </select>
+                </label>
+                <label>
+                    <span>Team 1 Player 1</span>
+                    <select name="team1_player1_id" required>
+                        <option value="">Choose player</option>
+                        {{range .Dashboard.Players}}
+                        <option value="{{.ID}}">{{.Name}} ({{.Team}})</option>
+                        {{end}}
+                    </select>
+                </label>
+                <label class="double-only">
+                    <span>Team 1 Player 2</span>
+                    <select name="team1_player2_id">
+                        <option value="">Choose player</option>
+                        {{range .Dashboard.Players}}
+                        <option value="{{.ID}}">{{.Name}} ({{.Team}})</option>
+                        {{end}}
+                    </select>
+                </label>
+                <label>
+                    <span>Team 2 Player 1</span>
+                    <select name="team2_player1_id" required>
+                        <option value="">Choose player</option>
+                        {{range .Dashboard.Players}}
+                        <option value="{{.ID}}">{{.Name}} ({{.Team}})</option>
+                        {{end}}
+                    </select>
+                </label>
+                <label class="double-only">
+                    <span>Team 2 Player 2</span>
+                    <select name="team2_player2_id">
+                        <option value="">Choose player</option>
+                        {{range .Dashboard.Players}}
+                        <option value="{{.ID}}">{{.Name}} ({{.Team}})</option>
+                        {{end}}
+                    </select>
+                </label>
+            </div>
+            <button class="button" type="submit">Schedule game</button>
+        </form>
+    </article>
+    
+    <article class="card admin-card admin-card-wide">
+        <h2>Update League Rules</h2>
+        <form class="stack" method="post" action="/admin/rules">
+            <label>
+                <span>Rules and settings</span>
+                <textarea name="rules" rows="8" required>{{.Dashboard.Rules}}</textarea>
+            </label>
+            <button class="button" type="submit">Save rules</button>
+        </form>
+    </article>
+</section>
+
+<section class="card">
+    <div class="section-heading">
+        <h2>Manage Games</h2>
+        <span>Record results or cancel fixtures</span>
+    </div>
+    <div class="stack">
+        {{range .Dashboard.Games}}
+        <article class="fixture-admin">
+            <div class="fixture-grid">
+                <div>
+                    <div class="match-top">
+                        <span class="{{badgeClass .Status}}">{{.Status}}</span>
+                        <span>{{gameLabel .GameType}}</span>
+                    </div>
+                    <h3>{{.Team1Name}} vs {{.Team2Name}}</h3>
+                    <p class="muted">{{.PlayableDescription}}</p>
+                    <p class="muted">Scheduled: {{.ScheduledAt}}</p>
+                </div>
+                <div class="admin-actions">
+                    <form class="inline-form" method="post" action="/admin/games/{{.ID}}/result">
+                        <input type="number" name="team1_score" min="0" placeholder="0" required>
+                        <span>-</span>
+                        <input type="number" name="team2_score" min="0" placeholder="0" required>
+                        <button class="button" type="submit">Save result</button>
+                    </form>
+                    <form method="post" action="/admin/games/{{.ID}}/cancel">
+                        <button class="button button-danger" type="submit" data-cancel-game>Cancel game</button>
+                    </form>
+                </div>
+            </div>
+        </article>
+        {{else}}
+        <p class="empty">No games created yet.</p>
+        {{end}}
+    </div>
+</section>
+{{end}}

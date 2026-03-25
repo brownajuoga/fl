@@ -1,0 +1,60 @@
+{{define "layout"}}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{.Title}} | Fussball League</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <div class="site-shell">
+        <header class="site-header">
+            <div class="container nav-row">
+                <a class="brand" href="/">
+                    <span class="brand-mark"></span>
+                    <span>Fussball League</span>
+                </a>
+                <nav class="site-nav">
+                    <a class="{{if eq .CurrentPath "/"}}active{{end}}" href="/">Home</a>
+                    <a class="{{if eq .CurrentPath "/standings"}}active{{end}}" href="/standings">Standings</a>
+                    <a class="{{if eq .CurrentPath "/schedule"}}active{{end}}" href="/schedule">Schedule</a>
+                    <a class="{{if eq .CurrentPath "/results"}}active{{end}}" href="/results">Results</a>
+                    <a class="{{if eq .CurrentPath "/teams"}}active{{end}}" href="/teams">Teams</a>
+                    <a class="{{if eq .CurrentPath "/stats"}}active{{end}}" href="/stats">Stats</a>
+                    {{if .Authenticated}}
+                    <a class="{{if eq .CurrentPath "/admin"}}active{{end}}" href="/admin">Admin</a>
+                    <a href="/logout">Logout</a>
+                    {{else}}
+                    <a class="{{if eq .CurrentPath "/login"}}active{{end}}" href="/login">Login</a>
+                    {{end}}
+                </nav>
+            </div>
+        </header>
+
+        <main class="container site-main">
+            {{if .Flash}}
+            <div class="flash">{{.Flash}}</div>
+            {{end}}
+            {{if eq .PageTemplate "index"}}{{template "index" .}}{{end}}
+            {{if eq .PageTemplate "standings"}}{{template "standings" .}}{{end}}
+            {{if eq .PageTemplate "games"}}{{template "games" .}}{{end}}
+            {{if eq .PageTemplate "results"}}{{template "results" .}}{{end}}
+            {{if eq .PageTemplate "teams"}}{{template "teams" .}}{{end}}
+            {{if eq .PageTemplate "stats"}}{{template "stats" .}}{{end}}
+            {{if eq .PageTemplate "login"}}{{template "login" .}}{{end}}
+            {{if eq .PageTemplate "admin_dashboard"}}{{template "admin_dashboard" .}}{{end}}
+        </main>
+
+        <footer class="site-footer">
+            <div class="container footer-row">
+                <p>Season control center for your fussball league.</p>
+                <p>&copy; {{.Year}} Fussball League</p>
+            </div>
+        </footer>
+    </div>
+
+    <script src="/static/js/main.js" defer></script>
+</body>
+</html>
+{{end}}

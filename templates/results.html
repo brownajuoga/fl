@@ -1,0 +1,38 @@
+{{define "results"}}
+<section class="page-head">
+    <p class="eyebrow">Results</p>
+    <h1>Completed Matches</h1>
+    <p>Review final scores and recent form across the league.</p>
+</section>
+
+<section class="card">
+    <div class="table-wrap">
+        <table>
+            <thead>
+                <tr>
+                    <th>Match</th>
+                    <th>Players</th>
+                    <th>Type</th>
+                    <th>Score</th>
+                    <th>Played</th>
+                </tr>
+            </thead>
+            <tbody>
+                {{range .ResultGames}}
+                <tr>
+                    <td>{{.Team1Name}} vs {{.Team2Name}}</td>
+                    <td>{{.PlayableDescription}}</td>
+                    <td>{{gameLabel .GameType}}</td>
+                    <td class="score">{{.Team1Score}} - {{.Team2Score}}</td>
+                    <td>{{.PlayedAt}}</td>
+                </tr>
+                {{else}}
+                <tr>
+                    <td colspan="5">No results yet.</td>
+                </tr>
+                {{end}}
+            </tbody>
+        </table>
+    </div>
+</section>
+{{end}}

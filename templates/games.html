@@ -1,0 +1,32 @@
+{{define "games"}}
+<section class="page-head">
+    <p class="eyebrow">Schedule</p>
+    <h1>Fixtures and Match Status</h1>
+    <p>Everything scheduled so far, including played and cancelled matches.</p>
+</section>
+
+<section class="stack">
+    {{range .ScheduledGames}}
+    <article class="card fixture-card">
+        <div class="match-top">
+            <span class="{{badgeClass .Status}}">{{.Status}}</span>
+            <span>{{gameLabel .GameType}}</span>
+        </div>
+        <div class="fixture-grid">
+            <div>
+                <h2>{{.Team1Name}} vs {{.Team2Name}}</h2>
+                <p class="muted">{{.PlayableDescription}}</p>
+            </div>
+            <div>
+                <p><strong>Scheduled:</strong> {{.ScheduledAt}}</p>
+                {{if eq .Status "played"}}
+                <p><strong>Result:</strong> <span class="score">{{.Team1Score}} - {{.Team2Score}}</span></p>
+                {{end}}
+            </div>
+        </div>
+    </article>
+    {{else}}
+    <p class="empty">No fixtures yet.</p>
+    {{end}}
+</section>
+{{end}}

@@ -1,0 +1,30 @@
+{{define "stats"}}
+<section class="page-head">
+    <p class="eyebrow">Stats</p>
+    <h1>League Highlights</h1>
+    <p>A quick view of form, momentum, and activity around the competition.</p>
+</section>
+
+<section class="stats-grid">
+    <article class="card stat-card">
+        <p class="stat-label">Top Team</p>
+        <h2>{{.Stats.TopTeam}}</h2>
+        <p>{{.Stats.TopTeamPoints}} points</p>
+    </article>
+    <article class="card stat-card">
+        <p class="stat-label">Best Attack</p>
+        <h2>{{.Stats.BestAttack}}</h2>
+        <p>Highest goals scored so far</p>
+    </article>
+    <article class="card stat-card">
+        <p class="stat-label">Most Active Player</p>
+        <h2>{{.Stats.MostActivePlayer}}</h2>
+        <p>{{.Stats.MostActiveGames}} game appearances</p>
+    </article>
+    <article class="card stat-card">
+        <p class="stat-label">Played vs Scheduled</p>
+        <h2>{{.Stats.PlayedGamesCount}} / {{.Stats.ScheduledGamesCount}}</h2>
+        <p>Completed games vs upcoming fixtures</p>
+    </article>
+</section>
+{{end}}

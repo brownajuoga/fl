@@ -26,6 +26,7 @@
                     <a class="{{if eq .CurrentPath "/admin"}}active{{end}}" href="/admin">Admin</a>
                     <a href="/logout">Logout</a>
                     {{else}}
+                    <a class="{{if eq .CurrentPath "/register"}}active{{end}}" href="/register">Register</a>
                     <a class="{{if eq .CurrentPath "/login"}}active{{end}}" href="/login">Login</a>
                     {{end}}
                 </nav>
@@ -43,12 +44,13 @@
             {{if eq .PageTemplate "teams"}}{{template "teams" .}}{{end}}
             {{if eq .PageTemplate "stats"}}{{template "stats" .}}{{end}}
             {{if eq .PageTemplate "login"}}{{template "login" .}}{{end}}
+            {{if eq .PageTemplate "register"}}{{template "register" .}}{{end}}
             {{if eq .PageTemplate "admin_dashboard"}}{{template "admin_dashboard" .}}{{end}}
         </main>
 
         <footer class="site-footer">
             <div class="container footer-row">
-                <p>Season control center for your fussball league.</p>
+                <p>fussball league.</p>
                 <p>&copy; {{.Year}} Fussball League</p>
             </div>
         </footer>

@@ -11,6 +11,7 @@ import (
 	"io/fs"
 	"log"
 	"net/http"
+	"net/mail"
 	"os"
 	"path/filepath"
 	"sort"
@@ -53,12 +54,17 @@ type Team struct {
 }
 
 type Player struct {
-	ID      int
-	Name    string
-	Email   string
-	TeamID  int
-	Team    string
-	IsAdmin bool
+	ID              int
+	Name            string
+	Email           string
+	TeamID          int
+	Team            string
+	IsAdmin         bool
+	AdminStatus     string
+	AdminRank       int
+	CanDelete       bool
+	CanApprove      bool
+	ProtectionLabel string
 }
 
 type TeamWithPlayers struct {
@@ -102,21 +108,33 @@ type Standing struct {
 }
 
 type StatsView struct {
-	TopTeam            string
-	TopTeamPoints      int
-	BestAttack         string
-	MostActivePlayer   string
-	MostActiveGames    int
-	PlayedGamesCount   int
+	TopTeam             string
+	TopTeamPoints       int
+	BestAttack          string
+	MostActivePlayer    string
+	MostActiveGames     int
+	PlayedGamesCount    int
 	ScheduledGamesCount int
 }
 
+type AdminLog struct {
+	ID        int
+	AdminName string
+	Action    string
+	Target    string
+	Details   string
+	CreatedAt string
+}
+
 type DashboardView struct {
-	Teams     []Team
-	Players   []Player
-	Games     []GameView
-	Standings []Standing
-	Rules     string
+	Teams         []Team
+	Players       []Player
+	Admins        []Player
+	PendingAdmins []Player
+	Games         []GameView
+	Standings     []Standing
+	Rules         string
+	Logs          []AdminLog
 }
 
 type TemplateData struct {
@@ -130,14 +148,14 @@ type TemplateData struct {
 	DefaultAdmin  string
 	DefaultPass   string
 
-	UpcomingGames []GameView
-	RecentResults []GameView
+	UpcomingGames  []GameView
+	RecentResults  []GameView
 	ScheduledGames []GameView
-	ResultGames   []GameView
-	Standings     []Standing
-	Teams         []TeamWithPlayers
-	Stats         StatsView
-	Dashboard     DashboardView
+	ResultGames    []GameView
+	Standings      []Standing
+	Teams          []TeamWithPlayers
+	Stats          StatsView
+	Dashboard      DashboardView
 }
 
 func main() {
@@ -156,7 +174,7 @@ func main() {
 	}
 
 	log.Printf("Fussball League running on http://localhost%s", server.Addr)
-	log.Printf("Default admin login: %s / %s", defaultAdminEmail, defaultAdminPassword)
+	log.Printf("Admins can register at http://localhost%s/register", server.Addr)
 	log.Fatal(server.ListenAndServe())
 }
 
@@ -235,6 +253,7 @@ func (app *App) routes() http.Handler {
 	mux.HandleFunc("/teams", app.teamsPage)
 	mux.HandleFunc("/stats", app.statsPage)
 	mux.HandleFunc("/login", app.loginPage)
+	mux.HandleFunc("/register", app.registerPage)
 	mux.HandleFunc("/logout", app.logout)
 	mux.Handle("/admin", app.requireAdmin(http.HandlerFunc(app.adminDashboard)))
 	mux.Handle("/admin/", app.requireAdmin(http.HandlerFunc(app.adminRoutes)))
@@ -360,16 +379,24 @@ func (app *App) loginPage(w http.ResponseWriter, r *http.Request) {
 		}
 
 		var playerID int
-		var name, hash string
+		var name, hash, adminStatus string
 		var isAdmin bool
-		err := app.db.QueryRow(`SELECT id, name, password_hash, is_admin FROM players WHERE lower(email) = ?`, email).
-			Scan(&playerID, &name, &hash, &isAdmin)
+		err := app.db.QueryRow(`SELECT id, name, password_hash, is_admin, COALESCE(admin_status, 'none') FROM players WHERE lower(email) = ?`, email).
+			Scan(&playerID, &name, &hash, &isAdmin, &adminStatus)
 		if err != nil {
-			http.Redirect(w, r, "/login?flash=Invalid+login", http.StatusSeeOther)
+			http.Redirect(w, r, "/login?flash=No+admin+account+was+found+for+that+email.+Register+first", http.StatusSeeOther)
 			return
 		}
 		if bcrypt.CompareHashAndPassword([]byte(hash), []byte(password)) != nil {
-			http.Redirect(w, r, "/login?flash=Invalid+login", http.StatusSeeOther)
+			http.Redirect(w, r, "/login?flash=Incorrect+password+for+that+email", http.StatusSeeOther)
+			return
+		}
+		if adminStatus == "pending" {
+			http.Redirect(w, r, "/login?flash=Your+admin+registration+is+still+waiting+for+approval", http.StatusSeeOther)
+			return
+		}
+		if !isAdmin {
+			http.Redirect(w, r, "/login?flash=That+email+exists,+but+it+does+not+have+admin+access", http.StatusSeeOther)
 			return
 		}
 
@@ -382,6 +409,7 @@ func (app *App) loginPage(w http.ResponseWriter, r *http.Request) {
 			app.serverError(w, err)
 			return
 		}
+		app.logAdminAction(playerID, "logged in", "session", 0, fmt.Sprintf("Admin %q signed in with email %s", name, email))
 
 		http.Redirect(w, r, "/admin?flash=Welcome+"+urlSafe(name), http.StatusSeeOther)
 	default:
@@ -389,7 +417,63 @@ func (app *App) loginPage(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (app *App) registerPage(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		data := app.baseData(r, "Admin Registration", "register")
+		app.render(w, data)
+	case http.MethodPost:
+		if err := r.ParseForm(); err != nil {
+			app.serverError(w, err)
+			return
+		}
+
+		name := strings.TrimSpace(r.FormValue("name"))
+		email := strings.TrimSpace(strings.ToLower(r.FormValue("email")))
+		password := r.FormValue("password")
+		confirmPassword := r.FormValue("confirm_password")
+		if name == "" || email == "" || password == "" || confirmPassword == "" {
+			http.Redirect(w, r, "/register?flash=Fill+in+all+registration+fields", http.StatusSeeOther)
+			return
+		}
+		if _, err := mail.ParseAddress(email); err != nil {
+			http.Redirect(w, r, "/register?flash=Enter+a+valid+email+address", http.StatusSeeOther)
+			return
+		}
+		if password != confirmPassword {
+			http.Redirect(w, r, "/register?flash=Passwords+do+not+match", http.StatusSeeOther)
+			return
+		}
+		if len(password) < 6 {
+			http.Redirect(w, r, "/register?flash=Password+must+be+at+least+6+characters", http.StatusSeeOther)
+			return
+		}
+
+		hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+		if err != nil {
+			app.serverError(w, err)
+			return
+		}
+
+		result, err := app.db.Exec(
+			`INSERT INTO players (name, email, is_admin, admin_status, password_hash) VALUES (?, ?, 0, 'pending', ?)`,
+			name, email, string(hash),
+		)
+		if err != nil {
+			http.Redirect(w, r, "/register?flash=That+email+is+already+registered", http.StatusSeeOther)
+			return
+		}
+
+		playerID, _ := result.LastInsertId()
+		app.logAdminAction(int(playerID), "requested admin approval", "player", int(playerID), fmt.Sprintf("Registered pending admin %q with email %s", name, email))
+		http.Redirect(w, r, "/register?flash=Registration+received.+Wait+for+an+existing+admin+to+approve+your+account", http.StatusSeeOther)
+	default:
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+	}
+}
+
 func (app *App) logout(w http.ResponseWriter, r *http.Request) {
+	app.logAdminActionFromRequest(r, "logged out", "session", 0, "Admin signed out")
 	app.destroySession(w, r)
 	http.Redirect(w, r, "/?flash=You+have+been+logged+out", http.StatusSeeOther)
 }
@@ -406,14 +490,22 @@ func (app *App) adminRoutes(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case r.Method == http.MethodPost && r.URL.Path == "/admin/teams":
 		app.createTeam(w, r)
+	case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/delete") && strings.Contains(r.URL.Path, "/admin/teams/"):
+		app.deleteTeam(w, r)
 	case r.Method == http.MethodPost && r.URL.Path == "/admin/players":
 		app.createPlayer(w, r)
+	case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/delete") && strings.Contains(r.URL.Path, "/admin/players/"):
+		app.deletePlayer(w, r)
+	case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/approve-admin") && strings.Contains(r.URL.Path, "/admin/players/"):
+		app.approveAdmin(w, r)
 	case r.Method == http.MethodPost && r.URL.Path == "/admin/games":
 		app.createGame(w, r)
 	case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/result"):
 		app.updateGameResult(w, r)
 	case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/cancel"):
 		app.cancelGame(w, r)
+	case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/delete") && strings.Contains(r.URL.Path, "/admin/games/"):
+		app.deleteGame(w, r)
 	case r.Method == http.MethodPost && r.URL.Path == "/admin/rules":
 		app.updateRules(w, r)
 	default:
@@ -432,10 +524,13 @@ func (app *App) createTeam(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if _, err := app.db.Exec(`INSERT INTO teams (name) VALUES (?)`, name); err != nil {
+	result, err := app.db.Exec(`INSERT INTO teams (name) VALUES (?)`, name)
+	if err != nil {
 		http.Redirect(w, r, "/admin?flash=Could+not+create+team", http.StatusSeeOther)
 		return
 	}
+	teamID, _ := result.LastInsertId()
+	app.logAdminActionFromRequest(r, "created team", "team", int(teamID), fmt.Sprintf("Created team %q", name))
 
 	http.Redirect(w, r, "/admin?flash=Team+created", http.StatusSeeOther)
 }
@@ -456,6 +551,10 @@ func (app *App) createPlayer(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/admin?flash=Player+name,+email,+and+team+are+required", http.StatusSeeOther)
 		return
 	}
+	if _, err := mail.ParseAddress(email); err != nil {
+		http.Redirect(w, r, "/admin?flash=Enter+a+valid+email+address", http.StatusSeeOther)
+		return
+	}
 	if password == "" {
 		password = "player123"
 	}
@@ -466,15 +565,57 @@ func (app *App) createPlayer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if _, err := app.db.Exec(
-		`INSERT INTO players (name, email, team_id, is_admin, password_hash) VALUES (?, ?, ?, ?, ?)`,
-		name, email, teamID, isAdmin, string(hash),
-	); err != nil {
+	adminStatus := "none"
+	if isAdmin {
+		adminStatus = "approved"
+	}
+
+	result, err := app.db.Exec(
+		`INSERT INTO players (name, email, team_id, is_admin, admin_status, password_hash) VALUES (?, ?, ?, ?, ?, ?)`,
+		name, email, teamID, isAdmin, adminStatus, string(hash),
+	)
+	if err != nil {
 		http.Redirect(w, r, "/admin?flash=Could+not+create+player", http.StatusSeeOther)
 		return
 	}
+	playerID, _ := result.LastInsertId()
+	action := "created player"
+	if isAdmin {
+		action = "created admin"
+	}
+	app.logAdminActionFromRequest(r, action, "player", int(playerID), fmt.Sprintf("Created %s %q with email %s", map[bool]string{true: "admin", false: "player"}[isAdmin], name, email))
 
 	http.Redirect(w, r, "/admin?flash=Player+created", http.StatusSeeOther)
+}
+
+func (app *App) approveAdmin(w http.ResponseWriter, r *http.Request) {
+	playerID, err := parseEntityID(r.URL.Path, "/admin/players/", "approve-admin")
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+
+	var name, email, status string
+	if err := app.db.QueryRow(`SELECT name, COALESCE(email, ''), COALESCE(admin_status, 'none') FROM players WHERE id = ?`, playerID).Scan(&name, &email, &status); err != nil {
+		http.Redirect(w, r, "/admin?flash=Admin+request+not+found", http.StatusSeeOther)
+		return
+	}
+	if status != "pending" {
+		http.Redirect(w, r, "/admin?flash=That+account+is+not+waiting+for+approval", http.StatusSeeOther)
+		return
+	}
+
+	session, _ := app.currentSession(r)
+	if _, err := app.db.Exec(
+		`UPDATE players SET is_admin = 1, admin_status = 'approved', approved_by = ?, approved_at = CURRENT_TIMESTAMP WHERE id = ?`,
+		session.PlayerID, playerID,
+	); err != nil {
+		http.Redirect(w, r, "/admin?flash=Could+not+approve+that+admin", http.StatusSeeOther)
+		return
+	}
+
+	app.logAdminActionFromRequest(r, "approved admin", "player", playerID, fmt.Sprintf("Approved pending admin %q with email %s", name, email))
+	http.Redirect(w, r, "/admin?flash=Admin+approved", http.StatusSeeOther)
 }
 
 func (app *App) createGame(w http.ResponseWriter, r *http.Request) {
@@ -512,16 +653,19 @@ func (app *App) createGame(w http.ResponseWriter, r *http.Request) {
 		t2p2 = 0
 	}
 
-	if _, err := app.db.Exec(
+	result, err := app.db.Exec(
 		`INSERT INTO games (
 			game_type, team1_id, team2_id, team1_player1_id, team1_player2_id,
 			team2_player1_id, team2_player2_id, scheduled_date, created_by
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		gameType, team1ID, team2ID, nullableInt(t1p1), nullableInt(t1p2), nullableInt(t2p1), nullableInt(t2p2), scheduledAt.Format(time.RFC3339), session.PlayerID,
-	); err != nil {
+	)
+	if err != nil {
 		http.Redirect(w, r, "/admin?flash=Could+not+create+game", http.StatusSeeOther)
 		return
 	}
+	gameID, _ := result.LastInsertId()
+	app.logAdminActionFromRequest(r, "scheduled game", "game", int(gameID), fmt.Sprintf("Scheduled %s: %d vs %d on %s", gameType, team1ID, team2ID, scheduledAt.Format(time.RFC3339)))
 
 	http.Redirect(w, r, "/admin?flash=Game+scheduled", http.StatusSeeOther)
 }
@@ -551,6 +695,7 @@ func (app *App) updateGameResult(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/admin?flash=Could+not+save+result", http.StatusSeeOther)
 		return
 	}
+	app.logAdminActionFromRequest(r, "updated result", "game", gameID, fmt.Sprintf("Saved result %d-%d", team1Score, team2Score))
 
 	http.Redirect(w, r, "/admin?flash=Result+saved", http.StatusSeeOther)
 }
@@ -566,6 +711,7 @@ func (app *App) cancelGame(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/admin?flash=Could+not+cancel+game", http.StatusSeeOther)
 		return
 	}
+	app.logAdminActionFromRequest(r, "cancelled game", "game", gameID, "Marked game as cancelled")
 
 	http.Redirect(w, r, "/admin?flash=Game+cancelled", http.StatusSeeOther)
 }
@@ -589,8 +735,130 @@ func (app *App) updateRules(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/admin?flash=Could+not+save+rules", http.StatusSeeOther)
 		return
 	}
+	app.logAdminActionFromRequest(r, "updated rules", "settings", 0, "Updated league rules")
 
 	http.Redirect(w, r, "/admin?flash=Rules+updated", http.StatusSeeOther)
+}
+
+func (app *App) deleteTeam(w http.ResponseWriter, r *http.Request) {
+	teamID, err := parseEntityID(r.URL.Path, "/admin/teams/", "delete")
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+
+	tx, err := app.db.Begin()
+	if err != nil {
+		app.serverError(w, err)
+		return
+	}
+	defer tx.Rollback()
+
+	var teamName string
+	if err := tx.QueryRow(`SELECT name FROM teams WHERE id = ?`, teamID).Scan(&teamName); err != nil {
+		http.Redirect(w, r, "/admin?flash=Team+not+found", http.StatusSeeOther)
+		return
+	}
+
+	if _, err := tx.Exec(`DELETE FROM games WHERE team1_id = ? OR team2_id = ?`, teamID, teamID); err != nil {
+		app.serverError(w, err)
+		return
+	}
+	if _, err := tx.Exec(`DELETE FROM players WHERE team_id = ?`, teamID); err != nil {
+		app.serverError(w, err)
+		return
+	}
+	if _, err := tx.Exec(`DELETE FROM teams WHERE id = ?`, teamID); err != nil {
+		app.serverError(w, err)
+		return
+	}
+	if err := tx.Commit(); err != nil {
+		app.serverError(w, err)
+		return
+	}
+
+	app.logAdminActionFromRequest(r, "deleted team", "team", teamID, fmt.Sprintf("Deleted team %q and its related players/games", teamName))
+	http.Redirect(w, r, "/admin?flash=Team+deleted", http.StatusSeeOther)
+}
+
+func (app *App) deletePlayer(w http.ResponseWriter, r *http.Request) {
+	playerID, err := parseEntityID(r.URL.Path, "/admin/players/", "delete")
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+
+	session, _ := app.currentSession(r)
+	if session.PlayerID == playerID {
+		http.Redirect(w, r, "/admin?flash=You+cannot+delete+the+admin+account+you+are+using", http.StatusSeeOther)
+		return
+	}
+
+	tx, err := app.db.Begin()
+	if err != nil {
+		app.serverError(w, err)
+		return
+	}
+	defer tx.Rollback()
+
+	var playerName, playerEmail, adminStatus string
+	var targetIsAdmin bool
+	if err := tx.QueryRow(`SELECT name, COALESCE(email, ''), is_admin, COALESCE(admin_status, 'none') FROM players WHERE id = ?`, playerID).Scan(&playerName, &playerEmail, &targetIsAdmin, &adminStatus); err != nil {
+		http.Redirect(w, r, "/admin?flash=Player+not+found", http.StatusSeeOther)
+		return
+	}
+	if targetIsAdmin && adminStatus == "approved" {
+		currentRank, err := app.approvedAdminRank(session.PlayerID)
+		if err != nil {
+			app.serverError(w, err)
+			return
+		}
+		targetRank, err := app.approvedAdminRank(playerID)
+		if err != nil {
+			app.serverError(w, err)
+			return
+		}
+		if currentRank == 0 || currentRank > 2 {
+			http.Redirect(w, r, "/admin?flash=Only+the+first+two+approved+admins+can+delete+other+admins", http.StatusSeeOther)
+			return
+		}
+		if targetRank == 1 {
+			http.Redirect(w, r, "/admin?flash=The+first+approved+admin+is+protected+and+cannot+be+deleted", http.StatusSeeOther)
+			return
+		}
+	}
+
+	if _, err := tx.Exec(`DELETE FROM games WHERE team1_player1_id = ? OR team1_player2_id = ? OR team2_player1_id = ? OR team2_player2_id = ?`, playerID, playerID, playerID, playerID); err != nil {
+		app.serverError(w, err)
+		return
+	}
+	if _, err := tx.Exec(`DELETE FROM players WHERE id = ?`, playerID); err != nil {
+		app.serverError(w, err)
+		return
+	}
+	if err := tx.Commit(); err != nil {
+		app.serverError(w, err)
+		return
+	}
+
+	app.logAdminActionFromRequest(r, "deleted player", "player", playerID, fmt.Sprintf("Deleted player %q with email %s and related games", playerName, playerEmail))
+	http.Redirect(w, r, "/admin?flash=Player+deleted", http.StatusSeeOther)
+}
+
+func (app *App) deleteGame(w http.ResponseWriter, r *http.Request) {
+	gameID, err := parseEntityID(r.URL.Path, "/admin/games/", "delete")
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+
+	if _, err := app.db.Exec(`DELETE FROM games WHERE id = ?`, gameID); err != nil {
+		http.Redirect(w, r, "/admin?flash=Could+not+delete+game", http.StatusSeeOther)
+		return
+	}
+
+	app.logAdminActionFromRequest(r, "deleted game", "game", gameID, "Deleted game permanently")
+	http.Redirect(w, r, "/admin?flash=Game+deleted", http.StatusSeeOther)
 }
 
 func (app *App) renderAdmin(w http.ResponseWriter, r *http.Request) {
@@ -619,14 +887,31 @@ func (app *App) renderAdmin(w http.ResponseWriter, r *http.Request) {
 		app.serverError(w, err)
 		return
 	}
+	logs, err := app.listAdminLogs(25)
+	if err != nil {
+		app.serverError(w, err)
+		return
+	}
+	session, _ := app.currentSession(r)
+	currentRank, err := app.approvedAdminRank(session.PlayerID)
+	if err != nil {
+		app.serverError(w, err)
+		return
+	}
+	players = app.decoratePlayersForAdmin(players, session.PlayerID, currentRank)
+	admins := filterApprovedAdmins(players)
+	pendingAdmins := filterPendingAdmins(players)
 
 	data := app.baseData(r, "Admin Dashboard", "admin_dashboard")
 	data.Dashboard = DashboardView{
-		Teams:     teams,
-		Players:   players,
-		Games:     games,
-		Standings: standings,
-		Rules:     rules,
+		Teams:         teams,
+		Players:       players,
+		Admins:        admins,
+		PendingAdmins: pendingAdmins,
+		Games:         games,
+		Standings:     standings,
+		Rules:         rules,
+		Logs:          logs,
 	}
 	app.render(w, data)
 }
@@ -741,9 +1026,13 @@ func (app *App) initSchema() error {
 			email TEXT UNIQUE,
 			team_id INTEGER,
 			is_admin BOOLEAN DEFAULT 0,
+			admin_status TEXT DEFAULT 'none',
+			approved_by INTEGER,
+			approved_at DATETIME,
 			password_hash TEXT,
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-			FOREIGN KEY (team_id) REFERENCES teams(id)
+			FOREIGN KEY (team_id) REFERENCES teams(id),
+			FOREIGN KEY (approved_by) REFERENCES players(id)
 		);`,
 		`CREATE TABLE IF NOT EXISTS games (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -772,6 +1061,16 @@ func (app *App) initSchema() error {
 			key TEXT PRIMARY KEY,
 			value TEXT NOT NULL,
 			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		);`,
+		`CREATE TABLE IF NOT EXISTS admin_logs (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			admin_id INTEGER NOT NULL,
+			action TEXT NOT NULL,
+			target_type TEXT NOT NULL,
+			target_id INTEGER DEFAULT 0,
+			details TEXT NOT NULL,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			FOREIGN KEY (admin_id) REFERENCES players(id)
 		);`,
 		`DROP VIEW IF EXISTS standings;`,
 		`CREATE VIEW standings AS
@@ -813,6 +1112,20 @@ func (app *App) initSchema() error {
 		if _, err := app.db.Exec(statement); err != nil {
 			return fmt.Errorf("init schema: %w", err)
 		}
+	}
+
+	for _, statement := range []string{
+		`ALTER TABLE players ADD COLUMN admin_status TEXT DEFAULT 'none';`,
+		`ALTER TABLE players ADD COLUMN approved_by INTEGER;`,
+		`ALTER TABLE players ADD COLUMN approved_at DATETIME;`,
+	} {
+		if _, err := app.db.Exec(statement); err != nil && !strings.Contains(err.Error(), "duplicate column name") {
+			return fmt.Errorf("init schema migration: %w", err)
+		}
+	}
+
+	if _, err := app.db.Exec(`UPDATE players SET admin_status = CASE WHEN is_admin = 1 THEN 'approved' ELSE COALESCE(admin_status, 'none') END WHERE admin_status IS NULL OR admin_status = ''`); err != nil {
+		return fmt.Errorf("sync admin status: %w", err)
 	}
 
 	return nil
@@ -887,9 +1200,13 @@ func (app *App) seedData() error {
 				return err
 			}
 		}
+		adminStatus := "none"
+		if p.Admin {
+			adminStatus = "approved"
+		}
 		result, err := tx.Exec(
-			`INSERT INTO players (name, email, team_id, is_admin, password_hash) VALUES (?, ?, ?, ?, ?)`,
-			p.Name, p.Email, teamIDs[p.TeamName], p.Admin, string(hash),
+			`INSERT INTO players (name, email, team_id, is_admin, admin_status, password_hash) VALUES (?, ?, ?, ?, ?, ?)`,
+			p.Name, p.Email, teamIDs[p.TeamName], p.Admin, adminStatus, string(hash),
 		)
 		if err != nil {
 			return err
@@ -1110,7 +1427,7 @@ func (app *App) listTeams() ([]Team, error) {
 
 func (app *App) listPlayers() ([]Player, error) {
 	rows, err := app.db.Query(`
-		SELECT p.id, p.name, COALESCE(p.email, ''), COALESCE(p.team_id, 0), COALESCE(t.name, ''), p.is_admin
+		SELECT p.id, p.name, COALESCE(p.email, ''), COALESCE(p.team_id, 0), COALESCE(t.name, ''), p.is_admin, COALESCE(p.admin_status, 'none')
 		FROM players p
 		LEFT JOIN teams t ON t.id = p.team_id
 		ORDER BY p.name ASC
@@ -1123,7 +1440,7 @@ func (app *App) listPlayers() ([]Player, error) {
 	var players []Player
 	for rows.Next() {
 		var p Player
-		if err := rows.Scan(&p.ID, &p.Name, &p.Email, &p.TeamID, &p.Team, &p.IsAdmin); err != nil {
+		if err := rows.Scan(&p.ID, &p.Name, &p.Email, &p.TeamID, &p.Team, &p.IsAdmin, &p.AdminStatus); err != nil {
 			return nil, err
 		}
 		players = append(players, p)
@@ -1189,6 +1506,139 @@ func (app *App) getRules() (string, error) {
 	return rules, err
 }
 
+func (app *App) listAdminLogs(limit int) ([]AdminLog, error) {
+	query := `
+		SELECT l.id, p.name, l.action, l.target_type, l.details, COALESCE(l.created_at, '')
+		FROM admin_logs l
+		LEFT JOIN players p ON p.id = l.admin_id
+		ORDER BY l.created_at DESC, l.id DESC
+	`
+	if limit > 0 {
+		query += fmt.Sprintf(" LIMIT %d", limit)
+	}
+
+	rows, err := app.db.Query(query)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var logs []AdminLog
+	for rows.Next() {
+		var logEntry AdminLog
+		var createdRaw string
+		if err := rows.Scan(&logEntry.ID, &logEntry.AdminName, &logEntry.Action, &logEntry.Target, &logEntry.Details, &createdRaw); err != nil {
+			return nil, err
+		}
+		logEntry.CreatedAt = formatDateTime(createdRaw)
+		logs = append(logs, logEntry)
+	}
+
+	return logs, rows.Err()
+}
+
+func (app *App) logAdminAction(adminID int, action, targetType string, targetID int, details string) {
+	if adminID == 0 {
+		return
+	}
+	if _, err := app.db.Exec(
+		`INSERT INTO admin_logs (admin_id, action, target_type, target_id, details) VALUES (?, ?, ?, ?, ?)`,
+		adminID, action, targetType, targetID, details,
+	); err != nil {
+		log.Printf("admin log error: %v", err)
+	}
+}
+
+func (app *App) logAdminActionFromRequest(r *http.Request, action, targetType string, targetID int, details string) {
+	session, ok := app.currentSession(r)
+	if !ok || !session.IsAdmin {
+		return
+	}
+	app.logAdminAction(session.PlayerID, action, targetType, targetID, details)
+}
+
+func (app *App) approvedAdminRank(playerID int) (int, error) {
+	if playerID == 0 {
+		return 0, nil
+	}
+
+	rows, err := app.db.Query(`
+		SELECT id
+		FROM players
+		WHERE is_admin = 1 AND COALESCE(admin_status, 'none') = 'approved'
+		ORDER BY created_at ASC, id ASC
+	`)
+	if err != nil {
+		return 0, err
+	}
+	defer rows.Close()
+
+	rank := 0
+	for rows.Next() {
+		var id int
+		if err := rows.Scan(&id); err != nil {
+			return 0, err
+		}
+		rank++
+		if id == playerID {
+			return rank, nil
+		}
+	}
+
+	return 0, rows.Err()
+}
+
+func (app *App) decoratePlayersForAdmin(players []Player, currentAdminID, currentAdminRank int) []Player {
+	for i := range players {
+		player := &players[i]
+		if player.IsAdmin && player.AdminStatus == "approved" {
+			player.AdminRank, _ = app.approvedAdminRank(player.ID)
+		}
+		if player.AdminStatus == "pending" {
+			player.CanApprove = true
+			player.CanDelete = true
+			player.ProtectionLabel = "Pending approval"
+			continue
+		}
+		if player.IsAdmin && player.AdminStatus == "approved" {
+			switch {
+			case player.ID == currentAdminID:
+				player.ProtectionLabel = "Current admin"
+			case player.AdminRank == 1:
+				player.ProtectionLabel = "Protected first admin"
+			case currentAdminRank > 0 && currentAdminRank <= 2:
+				player.CanDelete = true
+				player.ProtectionLabel = "Deletable by first two admins"
+			default:
+				player.ProtectionLabel = "Only the first two admins can delete approved admins"
+			}
+			continue
+		}
+		player.CanDelete = true
+	}
+	return players
+}
+
+func filterApprovedAdmins(players []Player) []Player {
+	admins := make([]Player, 0)
+	for _, player := range players {
+		if player.IsAdmin && player.AdminStatus == "approved" {
+			admins = append(admins, player)
+		}
+	}
+	return admins
+}
+
+func filterPendingAdmins(players []Player) []Player {
+	pending := make([]Player, 0)
+	for _, player := range players {
+		if player.AdminStatus == "pending" {
+			pending = append(pending, player)
+		}
+	}
+	return pending
+}
+
 func validateGame(gameType string, team1ID, team2ID, t1p1, t1p2, t2p1, t2p2 int) error {
 	if team1ID == 0 || team2ID == 0 {
 		return errors.New("both teams are required")
@@ -1208,6 +1658,12 @@ func validateGame(gameType string, team1ID, team2ID, t1p1, t1p2, t2p1, t2p2 int)
 		}
 	}
 	return nil
+}
+
+func parseEntityID(path, prefix, action string) (int, error) {
+	trimmed := strings.TrimPrefix(path, prefix)
+	trimmed = strings.TrimSuffix(trimmed, "/"+action)
+	return strconv.Atoi(trimmed)
 }
 
 func parseGameID(path, action string) (int, error) {

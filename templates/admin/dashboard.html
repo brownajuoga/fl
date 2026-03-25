@@ -20,9 +20,11 @@
     </article>
     <article class="card stat-card">
         <p class="stat-label">Leader</p>
+        {{if .Dashboard.Standings}}
         {{with index .Dashboard.Standings 0}}
         <h2>{{.Name}}</h2>
         <p>{{.Points}} points</p>
+        {{end}}
         {{else}}
         <h2>None</h2>
         {{end}}
@@ -159,12 +161,106 @@
     </article>
 </section>
 
-<section class="card">
-    <div class="section-heading">
-        <h2>Manage Games</h2>
-        <span>Record results or cancel fixtures</span>
-    </div>
-    <div class="stack">
+<section class="stack">
+    <details class="card collapse-panel">
+        <summary class="collapse-summary">
+            <span>Admin Accounts</span>
+            <span class="muted">Open to view registered admin emails</span>
+        </summary>
+        <div class="stack compact collapse-content">
+            {{range .Dashboard.Admins}}
+            <div class="player-row">
+                <div>
+                    <strong>{{.Name}}</strong>
+                    <p class="muted">{{.Email}}</p>
+                    <p class="muted">Approved admin #{{.AdminRank}}</p>
+                </div>
+                <div class="stack compact">
+                    <span class="badge badge-played">Admin</span>
+                    {{if .ProtectionLabel}}
+                    <span class="muted">{{.ProtectionLabel}}</span>
+                    {{end}}
+                </div>
+            </div>
+            {{else}}
+            <p class="empty">No admin accounts are registered.</p>
+            {{end}}
+        </div>
+    </details>
+
+    <details class="card collapse-panel">
+        <summary class="collapse-summary">
+            <span>Pending Admin Approvals</span>
+            <span class="muted">Open to approve newly registered admins</span>
+        </summary>
+        <div class="stack compact collapse-content">
+            {{range .Dashboard.PendingAdmins}}
+            <form class="player-row" method="post" action="/admin/players/{{.ID}}/approve-admin">
+                <div>
+                    <strong>{{.Name}}</strong>
+                    <p class="muted">{{.Email}}</p>
+                    <p class="muted">Waiting for approval</p>
+                </div>
+                <button class="button" type="submit">Approve admin</button>
+            </form>
+            {{else}}
+            <p class="empty">No pending admin registrations.</p>
+            {{end}}
+        </div>
+    </details>
+
+    <details class="card collapse-panel">
+        <summary class="collapse-summary">
+            <span>Delete Teams</span>
+            <span class="muted">Opens team deletion tools</span>
+        </summary>
+        <div class="stack compact collapse-content">
+            {{range .Dashboard.Teams}}
+            <form class="player-row" method="post" action="/admin/teams/{{.ID}}/delete">
+                <div>
+                    <strong>{{.Name}}</strong>
+                </div>
+                <button class="button button-danger" type="submit" data-delete-entity="team">Delete</button>
+            </form>
+            {{else}}
+            <p class="empty">No teams to delete.</p>
+            {{end}}
+        </div>
+    </details>
+
+    <details class="card collapse-panel">
+        <summary class="collapse-summary">
+            <span>Delete Users</span>
+            <span class="muted">Opens user deletion tools</span>
+        </summary>
+        <div class="stack compact collapse-content">
+            {{range .Dashboard.Players}}
+            <form class="player-row" method="post" action="/admin/players/{{.ID}}/delete">
+                <div>
+                    <strong>{{.Name}}</strong>
+                    <p class="muted">{{.Email}}</p>
+                    {{if .ProtectionLabel}}
+                    <p class="muted">{{.ProtectionLabel}}</p>
+                    {{end}}
+                </div>
+                {{if .CanDelete}}
+                <button class="button button-danger" type="submit" data-delete-entity="user">Delete</button>
+                {{else}}
+                <span class="badge">{{.ProtectionLabel}}</span>
+                {{end}}
+            </form>
+            {{else}}
+            <p class="empty">No users to delete.</p>
+            {{end}}
+        </div>
+    </details>
+
+    <details class="card collapse-panel">
+        <summary class="collapse-summary">
+            <span>Manage Games and Data</span>
+            <span class="muted">Open to record results, cancel fixtures, or delete games</span>
+        </summary>
+        <div class="stack collapse-content">
         {{range .Dashboard.Games}}
         <article class="fixture-admin">
             <div class="fixture-grid">
@@ -187,12 +283,37 @@
                     <form method="post" action="/admin/games/{{.ID}}/cancel">
                         <button class="button button-danger" type="submit" data-cancel-game>Cancel game</button>
                     </form>
+                    <form method="post" action="/admin/games/{{.ID}}/delete">
+                        <button class="button button-danger" type="submit" data-delete-entity="game">Delete game</button>
+                    </form>
                 </div>
             </div>
         </article>
         {{else}}
         <p class="empty">No games created yet.</p>
         {{end}}
-    </div>
+        </div>
+    </details>
+
+    <details class="card collapse-panel">
+        <summary class="collapse-summary">
+            <span>Admin Activity Log</span>
+            <span class="muted">Open to review recent admin actions</span>
+        </summary>
+        <div class="stack compact collapse-content">
+        {{range .Dashboard.Logs}}
+        <article class="log-item">
+            <div class="section-heading">
+                <strong>{{.Action}}</strong>
+                <span class="muted">{{.CreatedAt}}</span>
+            </div>
+            <p><strong>{{.AdminName}}</strong> changed <strong>{{.Target}}</strong></p>
+            <p class="muted">{{.Details}}</p>
+        </article>
+        {{else}}
+        <p class="empty">No admin activity has been logged yet.</p>
+        {{end}}
+        </div>
+    </details>
 </section>
 {{end}}

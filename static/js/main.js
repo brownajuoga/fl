@@ -29,4 +29,13 @@ document.addEventListener("DOMContentLoaded", () => {
       }
     });
   });
+
+  document.querySelectorAll("[data-delete-entity]").forEach((button) => {
+    button.addEventListener("click", (event) => {
+      const entity = button.getAttribute("data-delete-entity") || "item";
+      if (!window.confirm(`Delete this ${entity}? This cannot be undone.`)) {
+        event.preventDefault();
+      }
+    });
+  });
 });

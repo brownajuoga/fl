@@ -3,23 +3,22 @@
     <div class="card auth-card">
         <p class="eyebrow">Admin Access</p>
         <h1>Sign in to manage the league</h1>
-        <p class="muted">Default seeded admin credentials are preloaded so you can start right away.</p>
+        <p class="muted">Use the exact admin email you registered with. If you have not created an admin account yet, register first.</p>
 
         <form class="stack" method="post" action="/login">
             <label>
-                <span>Email</span>
-                <input type="email" name="email" placeholder="admin@fussball.local" required>
+                <span>Admin email</span>
+                <input type="email" name="email" placeholder="name@example.com" required>
             </label>
             <label>
                 <span>Password</span>
-                <input type="password" name="password" placeholder="admin123" required>
+                <input type="password" name="password" placeholder="Your password" required>
             </label>
             <button class="button" type="submit">Login</button>
         </form>
 
         <div class="credentials">
-            <p><strong>Email:</strong> {{.DefaultAdmin}}</p>
-            <p><strong>Password:</strong> {{.DefaultPass}}</p>
+            <p><strong>Need access?</strong> <a href="/register">Register an admin email here</a>.</p>
         </div>
     </div>
 </section>

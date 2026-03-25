@@ -1,0 +1,33 @@
+{{define "register"}}
+<section class="auth-wrap">
+    <div class="card auth-card">
+        <p class="eyebrow">Admin Registration</p>
+        <h1>Create your admin login</h1>
+        <p class="muted">Register your real email address here. An existing approved admin must confirm your request before you can sign in to the admin dashboard.</p>
+
+        <form class="stack" method="post" action="/register">
+            <label>
+                <span>Full name</span>
+                <input type="text" name="name" placeholder="Jamie Doe" required>
+            </label>
+            <label>
+                <span>Email</span>
+                <input type="email" name="email" placeholder="jamie@example.com" required>
+            </label>
+            <label>
+                <span>Password</span>
+                <input type="password" name="password" placeholder="At least 6 characters" required>
+            </label>
+            <label>
+                <span>Confirm password</span>
+                <input type="password" name="confirm_password" placeholder="Repeat password" required>
+            </label>
+            <button class="button" type="submit">Register admin</button>
+        </form>
+
+        <div class="credentials">
+            <p><strong>Already registered?</strong> <a href="/login">Go to login</a>.</p>
+        </div>
+    </div>
+</section>
+{{end}}

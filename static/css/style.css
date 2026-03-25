@@ -282,13 +282,15 @@ textarea {
 }
 
 .match-card,
-.fixture-admin {
+.fixture-admin,
+.log-item {
     padding: 1rem 0;
     border-top: 1px solid var(--line);
 }
 
 .match-card:first-child,
-.fixture-admin:first-child {
+.fixture-admin:first-child,
+.log-item:first-child {
     border-top: 0;
     padding-top: 0;
 }
@@ -433,6 +435,41 @@ textarea {
 
 .empty {
     color: var(--muted);
+}
+
+.collapse-panel {
+    padding: 0;
+    overflow: hidden;
+}
+
+.collapse-summary {
+    list-style: none;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    padding: 1.25rem 1.4rem;
+    cursor: pointer;
+}
+
+.collapse-summary::-webkit-details-marker {
+    display: none;
+}
+
+.collapse-summary::after {
+    content: "+";
+    font-size: 1.4rem;
+    color: var(--accent-dark);
+    flex-shrink: 0;
+}
+
+.collapse-panel[open] .collapse-summary::after {
+    content: "-";
+}
+
+.collapse-content {
+    padding: 0 1.4rem 1.4rem;
+    border-top: 1px solid var(--line);
 }
 
 @media (max-width: 960px) {

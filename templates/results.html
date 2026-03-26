@@ -5,6 +5,15 @@
     <p>Review final scores and recent form across the league.</p>
 </section>
 
+{{if .ShowGameSearch}}
+<section class="card search-card">
+    <form class="inline-search" method="get" action="/results">
+        <input type="search" name="q" value="{{.SearchQuery}}" placeholder="Search teams, players, score, or played time">
+        <button class="button button-secondary" type="submit">Search results</button>
+    </form>
+</section>
+{{end}}
+
 <section class="card">
     <div class="table-wrap">
         <table>

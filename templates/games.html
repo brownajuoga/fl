@@ -5,9 +5,18 @@
     <p>Everything scheduled so far, including played and cancelled matches.</p>
 </section>
 
+{{if .ShowGameSearch}}
+<section class="card search-card">
+    <form class="inline-search" method="get" action="/schedule">
+        <input type="search" name="q" value="{{.SearchQuery}}" placeholder="Search teams, players, status, or time">
+        <button class="button button-secondary" type="submit">Search fixtures</button>
+    </form>
+</section>
+{{end}}
+
 <section class="stack">
     {{range .ScheduledGames}}
-    <article class="card fixture-card">
+    <article class="card fixture-card" id="game-{{.ID}}">
         <div class="match-top">
             <span class="{{badgeClass .Status}}">{{.Status}}</span>
             <span>{{gameLabel .GameType}}</span>
@@ -16,14 +25,124 @@
             <div>
                 <h2>{{.Team1Name}} vs {{.Team2Name}}</h2>
                 <p class="muted">{{.PlayableDescription}}</p>
+                {{if eq .GameType "doubles"}}
+                <p class="muted">Lineup: {{.Team1StrikerName}} (striker), {{.Team1DefenderName}} (defender) vs {{.Team2StrikerName}} (striker), {{.Team2DefenderName}} (defender)</p>
+                {{else}}
+                <p class="muted">Strikers: {{.Team1StrikerName}} vs {{.Team2StrikerName}}</p>
+                {{end}}
+                {{if .RefereeName}}
+                <p class="muted">Assigned referee: {{.RefereeName}}</p>
+                {{end}}
+                {{if .RefereeSessionName}}
+                <p class="muted">Active referee session: {{.RefereeSessionName}}</p>
+                {{end}}
             </div>
             <div>
                 <p><strong>Scheduled:</strong> {{.ScheduledAt}}</p>
+                {{if eq .Status "live"}}
+                <p><strong>Live score:</strong> <span class="score">{{.Team1Score}} - {{.Team2Score}}</span></p>
+                <p><strong>Minute:</strong> {{.LiveMinute}}' {{if .LivePaused}}(Paused){{end}}</p>
+                {{end}}
                 {{if eq .Status "played"}}
                 <p><strong>Result:</strong> <span class="score">{{.Team1Score}} - {{.Team2Score}}</span></p>
                 {{end}}
             </div>
         </div>
+        {{if .RefereeAuthorized}}
+        <div class="referee-panel">
+            <p class="muted">Referee controls</p>
+            <form class="stack compact" method="post" action="/referee/games/{{.ID}}/lineup">
+                <input type="hidden" name="minute" value="{{.LiveMinute}}">
+                <div class="form-grid">
+                    <label>
+                        <span class="muted">{{.Team1Name}} striker</span>
+                        <select name="team1_striker_id" required>
+                            {{if .Team1Player1ID}}<option value="{{.Team1Player1ID}}" {{if eq .Team1StrikerID .Team1Player1ID}}selected{{end}}>{{.Team1Player1Name}}</option>{{end}}
+                            {{if .Team1Player2ID}}<option value="{{.Team1Player2ID}}" {{if eq .Team1StrikerID .Team1Player2ID}}selected{{end}}>{{.Team1Player2Name}}</option>{{end}}
+                        </select>
+                    </label>
+                    <label>
+                        <span class="muted">{{.Team2Name}} striker</span>
+                        <select name="team2_striker_id" required>
+                            {{if .Team2Player1ID}}<option value="{{.Team2Player1ID}}" {{if eq .Team2StrikerID .Team2Player1ID}}selected{{end}}>{{.Team2Player1Name}}</option>{{end}}
+                            {{if .Team2Player2ID}}<option value="{{.Team2Player2ID}}" {{if eq .Team2StrikerID .Team2Player2ID}}selected{{end}}>{{.Team2Player2Name}}</option>{{end}}
+                        </select>
+                    </label>
+                    {{if eq .GameType "doubles"}}
+                    <label>
+                        <span class="muted">{{.Team1Name}} defender</span>
+                        <select name="team1_defender_id" required>
+                            {{if .Team1Player1ID}}<option value="{{.Team1Player1ID}}" {{if eq .Team1DefenderID .Team1Player1ID}}selected{{end}}>{{.Team1Player1Name}}</option>{{end}}
+                            {{if .Team1Player2ID}}<option value="{{.Team1Player2ID}}" {{if eq .Team1DefenderID .Team1Player2ID}}selected{{end}}>{{.Team1Player2Name}}</option>{{end}}
+                        </select>
+                    </label>
+                    <label>
+                        <span class="muted">{{.Team2Name}} defender</span>
+                        <select name="team2_defender_id" required>
+                            {{if .Team2Player1ID}}<option value="{{.Team2Player1ID}}" {{if eq .Team2DefenderID .Team2Player1ID}}selected{{end}}>{{.Team2Player1Name}}</option>{{end}}
+                            {{if .Team2Player2ID}}<option value="{{.Team2Player2ID}}" {{if eq .Team2DefenderID .Team2Player2ID}}selected{{end}}>{{.Team2Player2Name}}</option>{{end}}
+                        </select>
+                    </label>
+                    {{end}}
+                </div>
+                <button class="button button-secondary" type="submit">Update lineup roles</button>
+            </form>
+            <div class="goal-actions">
+                {{if .Team1Player1ID}}
+                <form method="post" action="/referee/games/{{.ID}}/goal">
+                    <input type="hidden" name="scorer_id" value="{{.Team1Player1ID}}">
+                    <input type="hidden" name="minute" value="{{.LiveMinute}}">
+                    <button class="button button-secondary" type="submit">+ Goal {{.Team1Player1Name}}</button>
+                </form>
+                {{end}}
+                {{if .Team1Player2ID}}
+                <form method="post" action="/referee/games/{{.ID}}/goal">
+                    <input type="hidden" name="scorer_id" value="{{.Team1Player2ID}}">
+                    <input type="hidden" name="minute" value="{{.LiveMinute}}">
+                    <button class="button button-secondary" type="submit">+ Goal {{.Team1Player2Name}}</button>
+                </form>
+                {{end}}
+                {{if .Team2Player1ID}}
+                <form method="post" action="/referee/games/{{.ID}}/goal">
+                    <input type="hidden" name="scorer_id" value="{{.Team2Player1ID}}">
+                    <input type="hidden" name="minute" value="{{.LiveMinute}}">
+                    <button class="button button-secondary" type="submit">+ Goal {{.Team2Player1Name}}</button>
+                </form>
+                {{end}}
+                {{if .Team2Player2ID}}
+                <form method="post" action="/referee/games/{{.ID}}/goal">
+                    <input type="hidden" name="scorer_id" value="{{.Team2Player2ID}}">
+                    <input type="hidden" name="minute" value="{{.LiveMinute}}">
+                    <button class="button button-secondary" type="submit">+ Goal {{.Team2Player2Name}}</button>
+                </form>
+                {{end}}
+            </div>
+            <div class="fixture-grid">
+                <form class="inline-form" method="post" action="/referee/games/{{.ID}}/minute">
+                    <input type="number" name="minute" min="0" value="{{.LiveMinute}}" required>
+                    <button class="button button-secondary" type="submit">Update minute</button>
+                </form>
+                <div class="goal-actions">
+                    <form method="post" action="/referee/games/{{.ID}}/pause">
+                        <button class="button button-secondary" type="submit">Pause</button>
+                    </form>
+                    <form method="post" action="/referee/games/{{.ID}}/resume">
+                        <button class="button button-secondary" type="submit">Resume / Start live</button>
+                    </form>
+                </div>
+            </div>
+        </div>
+        {{else if .RefereeCode}}
+        <div class="referee-panel">
+            <p class="muted">Enter name and the one-time confirmation code from an admin.</p>
+            <form class="inline-form" method="post" action="/referee/access">
+                <input type="hidden" name="game_id" value="{{.ID}}">
+                <input type="text" name="name" placeholder="Referee name" required>
+                <input type="text" name="code" placeholder="OTP / confirmation code" required>
+                <button class="button" type="submit">Unlock referee access</button>
+            </form>
+        </div>
+        {{end}}
     </article>
     {{else}}
     <p class="empty">No fixtures yet.</p>

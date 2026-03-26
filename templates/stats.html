@@ -2,29 +2,140 @@
 <section class="page-head">
     <p class="eyebrow">Stats</p>
     <h1>League Highlights</h1>
-    <p>A quick view of form, momentum, and activity around the competition.</p>
+    <p>A flexible board of live league insights chosen by the admins.</p>
 </section>
 
-<section class="stats-grid">
+<section class="dynamic-stats-grid">
+    {{range .StatsWidgets}}
+    {{if eq . "top_team"}}
     <article class="card stat-card">
         <p class="stat-label">Top Team</p>
-        <h2>{{.Stats.TopTeam}}</h2>
-        <p>{{.Stats.TopTeamPoints}} points</p>
+        <h2>{{$.Stats.TopTeam}}</h2>
+        <p>{{$.Stats.TopTeamPoints}} points</p>
     </article>
+    {{end}}
+
+    {{if eq . "best_attack"}}
     <article class="card stat-card">
         <p class="stat-label">Best Attack</p>
-        <h2>{{.Stats.BestAttack}}</h2>
+        <h2>{{$.Stats.BestAttack}}</h2>
         <p>Highest goals scored so far</p>
     </article>
+    {{end}}
+
+    {{if eq . "best_defense"}}
+    <article class="card stat-card">
+        <p class="stat-label">Best Defense</p>
+        <h2>{{$.Stats.BestDefense}}</h2>
+        <p>Fewest goals conceded</p>
+    </article>
+    {{end}}
+
+    {{if eq . "top_scorer"}}
+    <article class="card stat-card">
+        <p class="stat-label">Top Scorer</p>
+        <h2>{{$.Stats.TopScorer}}</h2>
+        <p>{{$.Stats.TopScorerGoals}} goals recorded</p>
+    </article>
+    {{end}}
+
+    {{if eq . "most_active_player"}}
     <article class="card stat-card">
         <p class="stat-label">Most Active Player</p>
-        <h2>{{.Stats.MostActivePlayer}}</h2>
-        <p>{{.Stats.MostActiveGames}} game appearances</p>
+        <h2>{{$.Stats.MostActivePlayer}}</h2>
+        <p>{{$.Stats.MostActiveGames}} game appearances</p>
     </article>
+    {{end}}
+
+    {{if eq . "played_vs_scheduled"}}
     <article class="card stat-card">
         <p class="stat-label">Played vs Scheduled</p>
-        <h2>{{.Stats.PlayedGamesCount}} / {{.Stats.ScheduledGamesCount}}</h2>
+        <h2>{{$.Stats.PlayedGamesCount}} / {{$.Stats.ScheduledGamesCount}}</h2>
         <p>Completed games vs upcoming fixtures</p>
     </article>
+    {{end}}
+
+    {{if eq . "highest_scoring_game"}}
+    <article class="card stat-card">
+        <p class="stat-label">Highest Scoring Game</p>
+        <h2>{{$.Stats.TopScoringGame}}</h2>
+        <p>{{$.Stats.TopScoringGoals}} total goals</p>
+    </article>
+    {{end}}
+
+    {{if eq . "top_scorers_table"}}
+    <section class="card dynamic-widget-wide">
+        <div class="section-heading">
+            <h2>Top Strikers</h2>
+            <span>Showing top {{$.StatsLimit}}</span>
+        </div>
+        <div class="table-wrap">
+            <table>
+                <thead>
+                    <tr>
+                        <th>#</th>
+                        <th>Player</th>
+                        <th>Team</th>
+                        <th>Goals</th>
+                        <th>Minutes</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {{range $index, $item := $.Stats.TopScorers}}
+                    <tr>
+                        <td>{{add1 $index}}</td>
+                        <td>{{$item.Name}}</td>
+                        <td>{{$item.Team}}</td>
+                        <td>{{$item.Value}}</td>
+                        <td>{{$item.Minutes}}</td>
+                    </tr>
+                    {{else}}
+                    <tr>
+                        <td colspan="5">No striker data recorded yet.</td>
+                    </tr>
+                    {{end}}
+                </tbody>
+            </table>
+        </div>
+    </section>
+    {{end}}
+
+    {{if eq . "top_defenders_table"}}
+    <section class="card dynamic-widget-wide">
+        <div class="section-heading">
+            <h2>Best Defenders</h2>
+            <span>Showing top {{$.DefenderLimit}} by goals conceded</span>
+        </div>
+        <div class="table-wrap">
+            <table>
+                <thead>
+                    <tr>
+                        <th>#</th>
+                        <th>Player</th>
+                        <th>Team</th>
+                        <th>Goals Conceded</th>
+                        <th>Minutes</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {{range $index, $item := $.Stats.TopDefenders}}
+                    <tr>
+                        <td>{{add1 $index}}</td>
+                        <td>{{$item.Name}}</td>
+                        <td>{{$item.Team}}</td>
+                        <td>{{$item.Value}}</td>
+                        <td>{{$item.Minutes}}</td>
+                    </tr>
+                    {{else}}
+                    <tr>
+                        <td colspan="5">No defender data recorded yet.</td>
+                    </tr>
+                    {{end}}
+                </tbody>
+            </table>
+        </div>
+    </section>
+    {{end}}
+    {{end}}
 </section>
 {{end}}

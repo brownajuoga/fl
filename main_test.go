@@ -2,9 +2,7 @@ package main
 
 import (
 	"net/http"
-	"net/http/cookiejar"
 	"net/http/httptest"
-	"net/url"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -47,34 +45,25 @@ func TestAdminLoginWithStoredEmail(t *testing.T) {
 	defer app.db.Close()
 
 	router := app.routes()
-	server := httptest.NewServer(router)
-	defer server.Close()
-
-	jar, err := cookiejar.New(nil)
-	if err != nil {
-		t.Fatalf("cookie jar: %v", err)
-	}
-	client := &http.Client{
-		Jar: jar,
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			return http.ErrUseLastResponse
-		},
+	registerBody := strings.NewReader("name=First+Admin&email=firstadmin%40example.com&password=secure123&confirm_password=secure123")
+	registerReq := httptest.NewRequest(http.MethodPost, "/register", registerBody)
+	registerReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	registerRec := httptest.NewRecorder()
+	router.ServeHTTP(registerRec, registerReq)
+	if registerRec.Code != http.StatusSeeOther {
+		t.Fatalf("register status = %d, want %d", registerRec.Code, http.StatusSeeOther)
 	}
 
-	form := url.Values{}
-	form.Set("email", defaultAdminEmail)
-	form.Set("password", defaultAdminPassword)
+	loginBody := strings.NewReader("email=firstadmin%40example.com&password=secure123")
+	loginReq := httptest.NewRequest(http.MethodPost, "/login", loginBody)
+	loginReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	loginRec := httptest.NewRecorder()
+	router.ServeHTTP(loginRec, loginReq)
 
-	resp, err := client.Post(server.URL+"/login", "application/x-www-form-urlencoded", strings.NewReader(form.Encode()))
-	if err != nil {
-		t.Fatalf("login request: %v", err)
+	if loginRec.Code != http.StatusSeeOther {
+		t.Fatalf("login status = %d, want %d", loginRec.Code, http.StatusSeeOther)
 	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusSeeOther {
-		t.Fatalf("login status = %d, want %d", resp.StatusCode, http.StatusSeeOther)
-	}
-	if location := resp.Header.Get("Location"); !strings.HasPrefix(location, "/admin?flash=Welcome+") {
+	if location := loginRec.Header().Get("Location"); !strings.HasPrefix(location, "/admin?flash=Welcome+") {
 		t.Fatalf("login redirect target = %s, want /admin welcome redirect", location)
 	}
 }
@@ -88,45 +77,29 @@ func TestAdminRegistrationRequiresApprovalBeforeLogin(t *testing.T) {
 	defer app.db.Close()
 
 	router := app.routes()
-	server := httptest.NewServer(router)
-	defer server.Close()
+	firstAdminReq := httptest.NewRequest(http.MethodPost, "/register", strings.NewReader("name=Bootstrap+Admin&email=bootstrap%40example.com&password=secure123&confirm_password=secure123"))
+	firstAdminReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	firstAdminRec := httptest.NewRecorder()
+	router.ServeHTTP(firstAdminRec, firstAdminReq)
 
-	client := &http.Client{
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			return http.ErrUseLastResponse
-		},
+	registerReq := httptest.NewRequest(http.MethodPost, "/register", strings.NewReader("name=Taylor+Admin&email=taylor%40example.com&password=secure123&confirm_password=secure123"))
+	registerReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	registerRec := httptest.NewRecorder()
+	router.ServeHTTP(registerRec, registerReq)
+
+	if registerRec.Code != http.StatusSeeOther {
+		t.Fatalf("register status = %d, want %d", registerRec.Code, http.StatusSeeOther)
 	}
 
-	registerForm := url.Values{}
-	registerForm.Set("name", "Taylor Admin")
-	registerForm.Set("email", "taylor@example.com")
-	registerForm.Set("password", "secure123")
-	registerForm.Set("confirm_password", "secure123")
+	loginReq := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader("email=taylor%40example.com&password=secure123"))
+	loginReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	loginRec := httptest.NewRecorder()
+	router.ServeHTTP(loginRec, loginReq)
 
-	registerResp, err := client.Post(server.URL+"/register", "application/x-www-form-urlencoded", strings.NewReader(registerForm.Encode()))
-	if err != nil {
-		t.Fatalf("register request: %v", err)
+	if loginRec.Code != http.StatusSeeOther {
+		t.Fatalf("login status = %d, want %d", loginRec.Code, http.StatusSeeOther)
 	}
-	defer registerResp.Body.Close()
-
-	if registerResp.StatusCode != http.StatusSeeOther {
-		t.Fatalf("register status = %d, want %d", registerResp.StatusCode, http.StatusSeeOther)
-	}
-
-	loginForm := url.Values{}
-	loginForm.Set("email", "taylor@example.com")
-	loginForm.Set("password", "secure123")
-
-	loginResp, err := client.Post(server.URL+"/login", "application/x-www-form-urlencoded", strings.NewReader(loginForm.Encode()))
-	if err != nil {
-		t.Fatalf("login request: %v", err)
-	}
-	defer loginResp.Body.Close()
-
-	if loginResp.StatusCode != http.StatusSeeOther {
-		t.Fatalf("login status = %d, want %d", loginResp.StatusCode, http.StatusSeeOther)
-	}
-	if location := loginResp.Header.Get("Location"); location != "/login?flash=Your+admin+registration+is+still+waiting+for+approval" {
+	if location := loginRec.Header().Get("Location"); location != "/login?flash=Your+admin+registration+is+still+waiting+for+approval" {
 		t.Fatalf("login redirect target = %s, want pending approval redirect", location)
 	}
 
@@ -134,16 +107,15 @@ func TestAdminRegistrationRequiresApprovalBeforeLogin(t *testing.T) {
 		t.Fatalf("approve admin: %v", err)
 	}
 
-	approvedResp, err := client.Post(server.URL+"/login", "application/x-www-form-urlencoded", strings.NewReader(loginForm.Encode()))
-	if err != nil {
-		t.Fatalf("approved login request: %v", err)
-	}
-	defer approvedResp.Body.Close()
+	approvedReq := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader("email=taylor%40example.com&password=secure123"))
+	approvedReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	approvedRec := httptest.NewRecorder()
+	router.ServeHTTP(approvedRec, approvedReq)
 
-	if approvedResp.StatusCode != http.StatusSeeOther {
-		t.Fatalf("approved login status = %d, want %d", approvedResp.StatusCode, http.StatusSeeOther)
+	if approvedRec.Code != http.StatusSeeOther {
+		t.Fatalf("approved login status = %d, want %d", approvedRec.Code, http.StatusSeeOther)
 	}
-	if location := approvedResp.Header.Get("Location"); !strings.HasPrefix(location, "/admin?flash=Welcome+") {
+	if location := approvedRec.Header().Get("Location"); !strings.HasPrefix(location, "/admin?flash=Welcome+") {
 		t.Fatalf("approved login redirect target = %s, want /admin welcome redirect", location)
 	}
 }

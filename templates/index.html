@@ -10,8 +10,16 @@
         </div>
     </div>
     <div class="hero-panel">
+        {{if .LiveGames}}
+        <p class="panel-label live-label">Live Now</p>
+        {{with index .LiveGames 0}}
+        <h2>{{.Team1Name}} vs {{.Team2Name}}</h2>
+        <p><span class="badge badge-live">live</span> {{.LiveMinute}}' {{if .LivePaused}}Paused{{end}}</p>
+        <p class="score">{{.Team1Score}} - {{.Team2Score}}</p>
+        <p class="muted">{{.PlayableDescription}}</p>
+        {{end}}
+        {{else if .UpcomingGames}}
         <p class="panel-label">Next Kickoff</p>
-        {{if .UpcomingGames}}
         {{with index .UpcomingGames 0}}
         <h2>{{.Team1Name}} vs {{.Team2Name}}</h2>
         <p>{{gameLabel .GameType}} match</p>
@@ -25,10 +33,10 @@
     </div>
 </section>
 
-<section class="section-grid">
+<section class="section-grid {{if eq (len .RecentResults) 0}}section-grid-single{{end}}">
     <div class="card">
         <div class="section-heading">
-            <h2>Upcoming Games</h2>
+            <h2>{{if .LiveGames}}Live & Upcoming Games{{else}}Upcoming Games{{end}}</h2>
             <a href="/schedule">Full schedule</a>
         </div>
         <div class="stack">
@@ -48,6 +56,7 @@
         </div>
     </div>
 
+    {{if .RecentResults}}
     <div class="card">
         <div class="section-heading">
             <h2>Latest Results</h2>
@@ -78,6 +87,7 @@
             </table>
         </div>
     </div>
+    {{end}}
 </section>
 
 <section class="card">

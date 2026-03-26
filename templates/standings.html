@@ -5,6 +5,28 @@
     <p>Wins are worth 3 points, draws are worth 1, and goal difference breaks ties.</p>
 </section>
 
+{{if .LiveGames}}
+<section class="card search-card">
+    <div class="section-heading">
+        <h2>Live Matches</h2>
+        <span class="badge badge-live">{{len .LiveGames}} live</span>
+    </div>
+    <div class="stack">
+        {{range .LiveGames}}
+        <article class="match-card">
+            <div class="match-top">
+                <span class="badge badge-live">live</span>
+                <span>{{.LiveMinute}}' {{if .LivePaused}}paused{{end}}</span>
+            </div>
+            <h3>{{.Team1Name}} vs {{.Team2Name}}</h3>
+            <p class="score">{{.Team1Score}} - {{.Team2Score}}</p>
+            <p class="muted">{{.PlayableDescription}}</p>
+        </article>
+        {{end}}
+    </div>
+</section>
+{{end}}
+
 <section class="card">
     <div class="table-wrap">
         <table>
@@ -36,11 +58,12 @@
                     <td>{{$standing.GoalsAgainst}}</td>
                     <td>{{$standing.GoalDiff}}</td>
                     <td><strong>{{$standing.Points}}</strong></td>
-                    <td>{{$standing.WinPercentage}}</td>
+                    <td>{{if $standing.ShowWinRate}}{{$standing.WinPercentage}}{{else}}-{{end}}</td>
                 </tr>
                 {{end}}
             </tbody>
         </table>
     </div>
 </section>
+<p class="muted">Win percentage shows after at least 4 played matches for a team.</p>
 {{end}}

@@ -124,6 +124,7 @@ textarea {
 .hero,
 .section-grid,
 .stats-grid,
+.dynamic-stats-grid,
 .admin-grid,
 .team-grid {
     display: grid;
@@ -181,6 +182,10 @@ textarea {
     color: rgba(255, 255, 255, 0.72);
 }
 
+.live-label {
+    color: #b9ffd1;
+}
+
 .lede,
 .muted,
 .page-head p {
@@ -227,9 +232,21 @@ textarea {
     margin-bottom: 1.5rem;
 }
 
+.section-grid-single {
+    grid-template-columns: 1fr;
+}
+
 .stats-grid {
     grid-template-columns: repeat(4, minmax(0, 1fr));
     margin-bottom: 1.5rem;
+}
+
+.dynamic-stats-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.dynamic-widget-wide {
+    grid-column: span 2;
 }
 
 .admin-grid {
@@ -262,7 +279,8 @@ textarea {
 .match-top,
 .player-row,
 .fixture-grid,
-.inline-form {
+.inline-form,
+.inline-search {
     display: flex;
     align-items: center;
     justify-content: space-between;
@@ -345,6 +363,11 @@ thead th {
     color: var(--accent-dark);
 }
 
+.badge-live {
+    background: rgba(47, 133, 90, 0.16);
+    color: #1f7a4a;
+}
+
 .badge-cancelled {
     background: rgba(155, 44, 44, 0.12);
     color: var(--warn);
@@ -374,6 +397,12 @@ thead th {
     display: grid;
     place-items: center;
     min-height: 70vh;
+}
+
+.referee-panel {
+    margin-top: 1rem;
+    padding-top: 1rem;
+    border-top: 1px solid var(--line);
 }
 
 .auth-card {
@@ -422,10 +451,28 @@ textarea {
     gap: 1rem;
 }
 
+.admin-edit-grid {
+    width: 100%;
+}
+
 .admin-actions {
     display: grid;
     gap: 0.75rem;
     justify-items: end;
+}
+
+.goal-actions {
+    display: grid;
+    gap: 0.65rem;
+    width: 100%;
+}
+
+.search-card {
+    margin-bottom: 1.25rem;
+}
+
+.inline-search input {
+    flex: 1 1 18rem;
 }
 
 .inline-form input {
@@ -476,6 +523,7 @@ textarea {
     .hero,
     .section-grid,
     .stats-grid,
+    .dynamic-stats-grid,
     .admin-grid,
     .team-grid,
     .form-grid {
@@ -490,7 +538,8 @@ textarea {
     .footer-row,
     .fixture-grid,
     .section-heading,
-    .inline-form {
+    .inline-form,
+    .inline-search {
         flex-direction: column;
         align-items: flex-start;
     }

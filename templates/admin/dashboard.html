@@ -51,8 +51,8 @@
                 <input type="text" name="name" required>
             </label>
             <label>
-                <span>Email</span>
-                <input type="email" name="email" required>
+                <span>Email (optional for non-admin players)</span>
+                <input type="email" name="email">
             </label>
             <label>
                 <span>Team</span>
@@ -69,7 +69,7 @@
             </label>
             <label class="checkbox">
                 <input type="checkbox" name="is_admin">
-                <span>Grant admin access</span>
+                <span>Grant admin access. Admins still need an email to log in.</span>
             </label>
             <button class="button" type="submit">Add player</button>
         </form>
@@ -144,6 +144,15 @@
                         {{end}}
                     </select>
                 </label>
+                <label>
+                    <span>Referee</span>
+                    <select name="referee_id">
+                        <option value="">No referee assigned yet</option>
+                        {{range .Dashboard.Admins}}
+                        <option value="{{.ID}}">{{.Name}}</option>
+                        {{end}}
+                    </select>
+                </label>
             </div>
             <button class="button" type="submit">Schedule game</button>
         </form>
@@ -159,10 +168,30 @@
             <button class="button" type="submit">Save rules</button>
         </form>
     </article>
+
+    <article class="card admin-card">
+        <h2>Stats Display</h2>
+        <form class="stack" method="post" action="/admin/stats-config">
+            <label>
+                <span>Top striker rows on the stats page</span>
+                <input type="number" name="stats_limit" min="1" max="25" value="{{.Dashboard.StatsLimit}}" required>
+            </label>
+            <label>
+                <span>Top defender rows on the stats page</span>
+                <input type="number" name="defender_limit" min="1" max="25" value="{{.Dashboard.DefenderLimit}}" required>
+            </label>
+            <label>
+                <span>Stats widgets and order</span>
+                <textarea name="stats_widgets" rows="6" required>{{join .Dashboard.StatsWidgets ", "}}</textarea>
+            </label>
+            <p class="muted">Available widgets: `top_team`, `best_attack`, `best_defense`, `top_scorer`, `most_active_player`, `played_vs_scheduled`, `highest_scoring_game`, `top_scorers_table`, `top_defenders_table`</p>
+            <button class="button" type="submit">Save stats display</button>
+        </form>
+    </article>
 </section>
 
 <section class="stack">
-    <details class="card collapse-panel">
+    <details class="card collapse-panel" id="admin-accounts">
         <summary class="collapse-summary">
             <span>Admin Accounts</span>
             <span class="muted">Open to view registered admin emails</span>
@@ -188,7 +217,7 @@
         </div>
     </details>
 
-    <details class="card collapse-panel">
+    <details class="card collapse-panel" id="pending-admins">
         <summary class="collapse-summary">
             <span>Pending Admin Approvals</span>
             <span class="muted">Open to approve newly registered admins</span>
@@ -209,10 +238,75 @@
         </div>
     </details>
 
-    <details class="card collapse-panel">
+    <details class="card collapse-panel" id="edit-teams">
+        <summary class="collapse-summary">
+            <span>Edit Teams</span>
+            <span class="muted">Rename teams without deleting their data</span>
+        </summary>
+        <div class="stack compact collapse-content">
+            {{range .Dashboard.Teams}}
+            <form class="player-row" method="post" action="/admin/teams/{{.ID}}/update">
+                <label>
+                    <span class="muted">Team name</span>
+                    <input type="text" name="name" value="{{.Name}}" required>
+                </label>
+                <button class="button" type="submit">Save</button>
+            </form>
+            {{else}}
+            <p class="empty">No teams to edit.</p>
+            {{end}}
+        </div>
+    </details>
+
+    <details class="card collapse-panel" id="edit-users">
+        <summary class="collapse-summary">
+            <span>Edit Users</span>
+            <span class="muted">Update player, admin, team, email, or password details</span>
+        </summary>
+        <div class="stack compact collapse-content">
+            {{range .Dashboard.Players}}
+            {{$player := .}}
+            <form class="player-row" method="post" action="/admin/players/{{$player.ID}}/update">
+                <div class="form-grid admin-edit-grid">
+                    <label>
+                        <span class="muted">Name</span>
+                        <input type="text" name="name" value="{{$player.Name}}" required>
+                    </label>
+                    <label>
+                        <span class="muted">Email</span>
+                        <input type="email" name="email" value="{{$player.Email}}">
+                    </label>
+                    <label>
+                        <span class="muted">Team</span>
+                        <select name="team_id" required>
+                            {{range $.Dashboard.Teams}}
+                            <option value="{{.ID}}" {{if eq $player.TeamID .ID}}selected{{end}}>{{.Name}}</option>
+                            {{end}}
+                        </select>
+                    </label>
+                    <label>
+                        <span class="muted">New password</span>
+                        <input type="text" name="password" placeholder="Leave blank to keep current password">
+                    </label>
+                </div>
+                <div class="admin-actions">
+                    <label class="checkbox">
+                        <input type="checkbox" name="is_admin" {{if $player.IsAdmin}}checked{{end}}>
+                        <span>Admin access</span>
+                    </label>
+                    <button class="button" type="submit">Save</button>
+                </div>
+            </form>
+            {{else}}
+            <p class="empty">No users to edit.</p>
+            {{end}}
+        </div>
+    </details>
+
+    <details class="card collapse-panel" id="delete-teams">
         <summary class="collapse-summary">
             <span>Delete Teams</span>
-            <span class="muted">Opens team deletion tools</span>
+            <span class="muted">Only empty teams can be deleted now</span>
         </summary>
         <div class="stack compact collapse-content">
             {{range .Dashboard.Teams}}
@@ -228,7 +322,7 @@
         </div>
     </details>
 
-    <details class="card collapse-panel">
+    <details class="card collapse-panel" id="delete-users">
         <summary class="collapse-summary">
             <span>Delete Users</span>
             <span class="muted">Opens user deletion tools</span>
@@ -255,14 +349,14 @@
         </div>
     </details>
 
-    <details class="card collapse-panel">
+    <details class="card collapse-panel" id="manage-games">
         <summary class="collapse-summary">
             <span>Manage Games and Data</span>
             <span class="muted">Open to record results, cancel fixtures, or delete games</span>
         </summary>
         <div class="stack collapse-content">
         {{range .Dashboard.Games}}
-        <article class="fixture-admin">
+        <article class="fixture-admin" id="game-{{.ID}}">
             <div class="fixture-grid">
                 <div>
                     <div class="match-top">
@@ -272,13 +366,92 @@
                     <h3>{{.Team1Name}} vs {{.Team2Name}}</h3>
                     <p class="muted">{{.PlayableDescription}}</p>
                     <p class="muted">Scheduled: {{.ScheduledAt}}</p>
+                    {{if eq .Status "live"}}
+                    <p><strong>Live:</strong> <span class="score">{{.Team1Score}} - {{.Team2Score}}</span> {{if .LivePaused}}Paused{{else}}at {{.LiveMinute}}'{{end}}</p>
+                    {{end}}
+                    {{if .RefereeName}}
+                    <p class="muted">Referee: {{.RefereeName}}</p>
+                    {{end}}
+                {{if .RefereeCode}}
+                <p class="muted">Current referee code: <strong>{{.RefereeCode}}</strong></p>
+                {{end}}
+                {{if eq .GameType "doubles"}}
+                <p class="muted">Lineup: {{.Team1StrikerName}} (striker), {{.Team1DefenderName}} (defender) vs {{.Team2StrikerName}} (striker), {{.Team2DefenderName}} (defender)</p>
+                {{else}}
+                <p class="muted">Strikers: {{.Team1StrikerName}} vs {{.Team2StrikerName}}</p>
+                {{end}}
                 </div>
                 <div class="admin-actions">
+                    <form method="post" action="/admin/games/{{.ID}}/referee-code">
+                        <button class="button button-secondary" type="submit">Generate referee code</button>
+                    </form>
+                    <form class="stack compact" method="post" action="/admin/games/{{.ID}}/lineup">
+                        <input type="hidden" name="minute" value="{{.LiveMinute}}">
+                        <div class="form-grid">
+                            <label>
+                                <span class="muted">{{.Team1Name}} striker</span>
+                                <select name="team1_striker_id" required>
+                                    {{if .Team1Player1ID}}<option value="{{.Team1Player1ID}}" {{if eq .Team1StrikerID .Team1Player1ID}}selected{{end}}>{{.Team1Player1Name}}</option>{{end}}
+                                    {{if .Team1Player2ID}}<option value="{{.Team1Player2ID}}" {{if eq .Team1StrikerID .Team1Player2ID}}selected{{end}}>{{.Team1Player2Name}}</option>{{end}}
+                                </select>
+                            </label>
+                            <label>
+                                <span class="muted">{{.Team2Name}} striker</span>
+                                <select name="team2_striker_id" required>
+                                    {{if .Team2Player1ID}}<option value="{{.Team2Player1ID}}" {{if eq .Team2StrikerID .Team2Player1ID}}selected{{end}}>{{.Team2Player1Name}}</option>{{end}}
+                                    {{if .Team2Player2ID}}<option value="{{.Team2Player2ID}}" {{if eq .Team2StrikerID .Team2Player2ID}}selected{{end}}>{{.Team2Player2Name}}</option>{{end}}
+                                </select>
+                            </label>
+                            {{if eq .GameType "doubles"}}
+                            <label>
+                                <span class="muted">{{.Team1Name}} defender</span>
+                                <select name="team1_defender_id" required>
+                                    {{if .Team1Player1ID}}<option value="{{.Team1Player1ID}}" {{if eq .Team1DefenderID .Team1Player1ID}}selected{{end}}>{{.Team1Player1Name}}</option>{{end}}
+                                    {{if .Team1Player2ID}}<option value="{{.Team1Player2ID}}" {{if eq .Team1DefenderID .Team1Player2ID}}selected{{end}}>{{.Team1Player2Name}}</option>{{end}}
+                                </select>
+                            </label>
+                            <label>
+                                <span class="muted">{{.Team2Name}} defender</span>
+                                <select name="team2_defender_id" required>
+                                    {{if .Team2Player1ID}}<option value="{{.Team2Player1ID}}" {{if eq .Team2DefenderID .Team2Player1ID}}selected{{end}}>{{.Team2Player1Name}}</option>{{end}}
+                                    {{if .Team2Player2ID}}<option value="{{.Team2Player2ID}}" {{if eq .Team2DefenderID .Team2Player2ID}}selected{{end}}>{{.Team2Player2Name}}</option>{{end}}
+                                </select>
+                            </label>
+                            {{end}}
+                        </div>
+                        <button class="button button-secondary" type="submit">Update lineup</button>
+                    </form>
+                    <div class="goal-actions">
+                        {{if .Team1Player1ID}}
+                        <form method="post" action="/admin/games/{{.ID}}/goal">
+                            <input type="hidden" name="scorer_id" value="{{.Team1Player1ID}}">
+                            <button class="button button-secondary" type="submit">+ Goal {{.Team1Player1Name}}</button>
+                        </form>
+                        {{end}}
+                        {{if .Team1Player2ID}}
+                        <form method="post" action="/admin/games/{{.ID}}/goal">
+                            <input type="hidden" name="scorer_id" value="{{.Team1Player2ID}}">
+                            <button class="button button-secondary" type="submit">+ Goal {{.Team1Player2Name}}</button>
+                        </form>
+                        {{end}}
+                        {{if .Team2Player1ID}}
+                        <form method="post" action="/admin/games/{{.ID}}/goal">
+                            <input type="hidden" name="scorer_id" value="{{.Team2Player1ID}}">
+                            <button class="button button-secondary" type="submit">+ Goal {{.Team2Player1Name}}</button>
+                        </form>
+                        {{end}}
+                        {{if .Team2Player2ID}}
+                        <form method="post" action="/admin/games/{{.ID}}/goal">
+                            <input type="hidden" name="scorer_id" value="{{.Team2Player2ID}}">
+                            <button class="button button-secondary" type="submit">+ Goal {{.Team2Player2Name}}</button>
+                        </form>
+                        {{end}}
+                    </div>
                     <form class="inline-form" method="post" action="/admin/games/{{.ID}}/result">
-                        <input type="number" name="team1_score" min="0" placeholder="0" required>
+                        <input type="number" name="team1_score" min="0" value="{{.Team1Score}}" required>
                         <span>-</span>
-                        <input type="number" name="team2_score" min="0" placeholder="0" required>
-                        <button class="button" type="submit">Save result</button>
+                        <input type="number" name="team2_score" min="0" value="{{.Team2Score}}" required>
+                        <button class="button" type="submit">{{if eq .Status "live"}}Finalize result{{else}}Save result{{end}}</button>
                     </form>
                     <form method="post" action="/admin/games/{{.ID}}/cancel">
                         <button class="button button-danger" type="submit" data-cancel-game>Cancel game</button>
@@ -295,12 +468,41 @@
         </div>
     </details>
 
-    <details class="card collapse-panel">
+    <details class="card collapse-panel" id="admin-backups">
+        <summary class="collapse-summary">
+            <span>Backups</span>
+            <span class="muted">Create downloadable database snapshot URLs</span>
+        </summary>
+        <div class="stack compact collapse-content">
+            <form method="post" action="/admin/backups/create">
+                <button class="button" type="submit">Create backup snapshot</button>
+            </form>
+            {{range .Dashboard.Backups}}
+            <div class="player-row">
+                <div>
+                    <strong>{{.Name}}</strong>
+                    <p class="muted">{{.CreatedAt}} • {{.SizeLabel}}</p>
+                </div>
+                <a class="button button-secondary" href="{{.URL}}">Download</a>
+            </div>
+            {{else}}
+            <p class="empty">No backups yet.</p>
+            {{end}}
+        </div>
+    </details>
+
+    <details class="card collapse-panel" id="admin-logs">
         <summary class="collapse-summary">
             <span>Admin Activity Log</span>
             <span class="muted">Open to review recent admin actions</span>
         </summary>
         <div class="stack compact collapse-content">
+        {{if .ShowLogSearch}}
+        <form class="inline-search" method="get" action="/admin">
+            <input type="search" name="log_q" value="{{.SearchQuery}}" placeholder="Search admin, action, details, or time">
+            <button class="button button-secondary" type="submit">Search logs</button>
+        </form>
+        {{end}}
         {{range .Dashboard.Logs}}
         <article class="log-item">
             <div class="section-heading">

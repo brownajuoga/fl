@@ -5,6 +5,15 @@
     <p>Every registered team and the players currently assigned to it.</p>
 </section>
 
+{{if .ShowTeamSearch}}
+<section class="card search-card">
+    <form class="inline-search" method="get" action="/teams">
+        <input type="search" name="q" value="{{.SearchQuery}}" placeholder="Search team or player names">
+        <button class="button button-secondary" type="submit">Search teams</button>
+    </form>
+</section>
+{{end}}
+
 <section class="team-grid">
     {{range .Teams}}
     <article class="card team-card">
@@ -17,7 +26,9 @@
             <div class="player-row">
                 <div>
                     <strong>{{.Name}}</strong>
+                    {{if $.Authenticated}}
                     <p class="muted">{{.Email}}</p>
+                    {{end}}
                 </div>
                 {{if .IsAdmin}}
                 <span class="badge badge-played">Admin</span>

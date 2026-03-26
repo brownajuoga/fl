@@ -31,6 +31,7 @@ var appFS embed.FS
 const sessionCookieName = "fussball_session"
 
 var kenyaLocation = time.FixedZone("Africa/Nairobi", 3*60*60)
+var remoteDBSyncMu sync.Mutex
 
 type App struct {
 	db        *sql.DB
@@ -242,6 +243,9 @@ func newApp(dbPath string) (*App, error) {
 	if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil {
 		return nil, fmt.Errorf("create data directory: %w", err)
 	}
+	if err := syncDBFromRemote(dbPath); err != nil {
+		return nil, fmt.Errorf("sync database from remote: %w", err)
+	}
 
 	db, err := sql.Open("sqlite3", dbPath)
 	if err != nil {
@@ -336,13 +340,55 @@ func (app *App) routes() http.Handler {
 	mux.Handle("/admin", app.requireAdmin(http.HandlerFunc(app.adminDashboard)))
 	mux.Handle("/admin/", app.requireAdmin(http.HandlerFunc(app.adminRoutes)))
 
-	return app.logging(mux)
+	return app.logging(app.persistWrites(mux))
 }
 
 func (app *App) logging(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		log.Printf("%s %s", r.Method, r.URL.Path)
 		next.ServeHTTP(w, r)
+	})
+}
+
+type bufferedResponseWriter struct {
+	header http.Header
+	body   strings.Builder
+	status int
+}
+
+func newBufferedResponseWriter() *bufferedResponseWriter {
+	return &bufferedResponseWriter{
+		header: make(http.Header),
+		status: http.StatusOK,
+	}
+}
+
+func (w *bufferedResponseWriter) Header() http.Header { return w.header }
+func (w *bufferedResponseWriter) WriteHeader(status int) { w.status = status }
+func (w *bufferedResponseWriter) Write(p []byte) (int, error) { return w.body.WriteString(string(p)) }
+
+func (app *App) persistWrites(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !shouldPersistRequest(r) || !hasRemoteDBSyncConfigured() {
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		buffered := newBufferedResponseWriter()
+		next.ServeHTTP(buffered, r)
+
+		if buffered.status < 400 {
+			if err := app.syncDBToRemote(); err != nil {
+				log.Printf("remote db sync error: %v", err)
+				buffered.status = http.StatusInternalServerError
+				buffered.body.Reset()
+				buffered.body.WriteString("Remote database sync failed")
+			}
+		}
+
+		copyHeaders(w.Header(), buffered.header)
+		w.WriteHeader(buffered.status)
+		_, _ = w.Write([]byte(buffered.body.String()))
 	})
 }
 
@@ -3316,6 +3362,118 @@ func uploadBackupToRemote(localPath, name string) (string, error) {
 		return strings.ReplaceAll(publicTemplate, "{name}", name), nil
 	}
 	return uploadURL, nil
+}
+
+func hasRemoteDBSyncConfigured() bool {
+	return strings.TrimSpace(os.Getenv("REMOTE_DB_UPLOAD_URL")) != ""
+}
+
+func shouldPersistRequest(r *http.Request) bool {
+	switch r.Method {
+	case http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete:
+		return true
+	default:
+		return false
+	}
+}
+
+func copyHeaders(dst, src http.Header) {
+	for key, values := range src {
+		dst.Del(key)
+		for _, value := range values {
+			dst.Add(key, value)
+		}
+	}
+}
+
+func syncDBFromRemote(dbPath string) error {
+	downloadURL := strings.TrimSpace(os.Getenv("REMOTE_DB_DOWNLOAD_URL"))
+	if downloadURL == "" {
+		return nil
+	}
+
+	req, err := http.NewRequest(http.MethodGet, downloadURL, nil)
+	if err != nil {
+		return err
+	}
+	if bearer := strings.TrimSpace(os.Getenv("REMOTE_DB_AUTH_BEARER")); bearer != "" {
+		req.Header.Set("Authorization", "Bearer "+bearer)
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusNotFound {
+		return nil
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
+		return fmt.Errorf("remote db download failed: %s %s", resp.Status, strings.TrimSpace(string(body)))
+	}
+
+	tempPath := dbPath + ".download"
+	file, err := os.Create(tempPath)
+	if err != nil {
+		return err
+	}
+
+	if _, err := io.Copy(file, resp.Body); err != nil {
+		file.Close()
+		_ = os.Remove(tempPath)
+		return err
+	}
+	if err := file.Close(); err != nil {
+		_ = os.Remove(tempPath)
+		return err
+	}
+	if err := os.Rename(tempPath, dbPath); err != nil {
+		_ = os.Remove(tempPath)
+		return err
+	}
+	return nil
+}
+
+func (app *App) syncDBToRemote() error {
+	uploadURL := strings.TrimSpace(os.Getenv("REMOTE_DB_UPLOAD_URL"))
+	if uploadURL == "" {
+		return nil
+	}
+
+	remoteDBSyncMu.Lock()
+	defer remoteDBSyncMu.Unlock()
+
+	// Checkpoint first so SQLite flushes recent writes before we upload the file.
+	_, _ = app.db.Exec(`PRAGMA wal_checkpoint(TRUNCATE);`)
+
+	file, err := os.Open(app.dbPath)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	req, err := http.NewRequest(http.MethodPut, uploadURL, file)
+	if err != nil {
+		return err
+	}
+	if bearer := strings.TrimSpace(os.Getenv("REMOTE_DB_AUTH_BEARER")); bearer != "" {
+		req.Header.Set("Authorization", "Bearer "+bearer)
+	}
+	req.Header.Set("Content-Type", "application/octet-stream")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
+		return fmt.Errorf("remote db upload failed: %s %s", resp.Status, strings.TrimSpace(string(body)))
+	}
+	return nil
 }
 
 func envOrDefault(key, fallback string) string {

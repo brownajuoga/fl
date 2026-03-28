@@ -71,11 +71,18 @@ document.addEventListener("DOMContentLoaded", () => {
         const scrollY = window.scrollY;
         const openIds = Array.from(document.querySelectorAll("details[open][id]")).map((detail) => detail.id);
         const formData = new FormData(form);
+        const body = new URLSearchParams();
+        formData.forEach((value, key) => {
+          if (typeof value === "string") {
+            body.append(key, value);
+          }
+        });
         const response = await fetch(form.action, {
           method: "POST",
-          body: formData,
+          body,
           headers: {
             "X-Requested-With": "fetch",
+            "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
           },
           credentials: "same-origin",
         });

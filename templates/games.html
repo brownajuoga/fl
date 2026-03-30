@@ -116,6 +116,18 @@
                     <button class="button button-secondary" type="submit">+ Goal {{.Team2Player2Name}}</button>
                 </form>
                 {{end}}
+                <form method="post" action="/referee/games/{{.ID}}/goal">
+                    <input type="hidden" name="goal_kind" value="neutral">
+                    <input type="hidden" name="team_id" value="{{.Team1ID}}">
+                    <input type="hidden" name="minute" value="{{.LiveMinute}}">
+                    <button class="button button-secondary" type="submit">+ Own goal for {{.Team1Name}}</button>
+                </form>
+                <form method="post" action="/referee/games/{{.ID}}/goal">
+                    <input type="hidden" name="goal_kind" value="neutral">
+                    <input type="hidden" name="team_id" value="{{.Team2ID}}">
+                    <input type="hidden" name="minute" value="{{.LiveMinute}}">
+                    <button class="button button-secondary" type="submit">+ Own goal for {{.Team2Name}}</button>
+                </form>
             </div>
             <div class="fixture-grid">
                 <form class="inline-form" method="post" action="/referee/games/{{.ID}}/minute">

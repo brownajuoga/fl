@@ -70,6 +70,8 @@ document.addEventListener("DOMContentLoaded", () => {
         event.preventDefault();
         const scrollY = window.scrollY;
         const openIds = Array.from(document.querySelectorAll("details[open][id]")).map((detail) => detail.id);
+        const currentDetail = form.closest("details[id]");
+        const detailToClose = currentDetail && currentDetail.id !== "manage-games" ? currentDetail.id : "";
         const formData = new FormData(form);
         const body = new URLSearchParams();
         formData.forEach((value, key) => {
@@ -103,6 +105,9 @@ document.addEventListener("DOMContentLoaded", () => {
         }
         currentMain.innerHTML = newMain.innerHTML;
         openIds.forEach((id) => {
+          if (id === detailToClose) {
+            return;
+          }
           document.getElementById(id)?.setAttribute("open", "open");
         });
         window.scrollTo(0, scrollY);

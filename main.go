@@ -120,6 +120,7 @@ type GameView struct {
 	ScheduledAtInput    string
 	PlayedAtInput       string
 	PlayableDescription string
+	GoalEvents          []GoalEvent
 }
 
 type Standing struct {
@@ -170,6 +171,31 @@ type AdminLog struct {
 	CreatedAt string
 }
 
+type GoalEvent struct {
+	ID             int
+	GameID         int
+	ScorerID       int
+	ScorerName     string
+	TeamID         int
+	TeamName       string
+	Minute         int
+	GoalKind       string
+	RecordedAt     string
+	DisplayLabel   string
+}
+
+type ChangeRequest struct {
+	ID            int
+	Action        string
+	TargetType    string
+	TargetID      int
+	Details       string
+	RequestedBy   string
+	CreatedAt     string
+	Approvals     int
+	RequiredCount int
+}
+
 type DashboardView struct {
 	Teams         []Team
 	Players       []Player
@@ -183,6 +209,9 @@ type DashboardView struct {
 	StatsLimit    int
 	DefenderLimit int
 	StatsWidgets  []string
+	TournamentStart string
+	TournamentEnd   string
+	PendingChanges  []ChangeRequest
 }
 
 type BackupEntry struct {
@@ -304,6 +333,9 @@ func newApp(dbPath string) (*App, error) {
 		return nil, err
 	}
 	if err := app.cleanupOrphanedAdminReferences(); err != nil {
+		return nil, err
+	}
+	if err := app.cleanupOrphanedMatchData(); err != nil {
 		return nil, err
 	}
 	if err := app.cleanupLegacyDefaultAdmin(); err != nil {
@@ -707,6 +739,8 @@ func (app *App) adminRoutes(w http.ResponseWriter, r *http.Request) {
 		app.updateGameLineupAsAdmin(w, r)
 	case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/goal"):
 		app.recordGoal(w, r)
+	case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/delete-goal"):
+		app.deleteGoalEvent(w, r)
 	case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/result"):
 		app.updateGameResult(w, r)
 	case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/cancel"):
@@ -715,8 +749,12 @@ func (app *App) adminRoutes(w http.ResponseWriter, r *http.Request) {
 		app.deleteGame(w, r)
 	case r.Method == http.MethodPost && r.URL.Path == "/admin/rules":
 		app.updateRules(w, r)
+	case r.Method == http.MethodPost && r.URL.Path == "/admin/tournament":
+		app.updateTournamentSettings(w, r)
 	case r.Method == http.MethodPost && r.URL.Path == "/admin/stats-config":
 		app.updateStatsConfig(w, r)
+	case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/approve") && strings.Contains(r.URL.Path, "/admin/change-requests/"):
+		app.approveChangeRequest(w, r)
 	case r.Method == http.MethodPost && r.URL.Path == "/admin/backups/create":
 		app.createBackup(w, r)
 	case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/admin/backups/"):
@@ -1219,20 +1257,31 @@ func (app *App) updateGameResult(w http.ResponseWriter, r *http.Request) {
 		app.redirectWithReturn(w, r, "/admin", "Enter+valid+scores")
 		return
 	}
-
-	if _, err := app.db.Exec(
-		`UPDATE games
-		 SET team1_score = ?, team2_score = ?, status = 'played', played_date = ?, live_paused = 0,
-		     live_minute = CASE WHEN live_minute > 0 THEN live_minute ELSE 90 END
-		 WHERE id = ?`,
-		team1Score, team2Score, time.Now().Format(time.RFC3339), gameID,
+	session, _ := app.currentSession(r)
+	payload := fmt.Sprintf("%d:%d", team1Score, team2Score)
+	if err := app.submitChangeRequest(
+		r,
+		session.PlayerID,
+		"update_result",
+		"game",
+		gameID,
+		payload,
+		fmt.Sprintf("Update game #%d result to %d-%d", gameID, team1Score, team2Score),
+		func() error {
+			_, err := app.db.Exec(
+				`UPDATE games
+				 SET team1_score = ?, team2_score = ?, status = 'played', played_date = ?, live_paused = 0,
+				     live_minute = CASE WHEN live_minute > 0 THEN live_minute ELSE 90 END
+				 WHERE id = ?`,
+				team1Score, team2Score, time.Now().Format(time.RFC3339), gameID,
+			)
+			return err
+		},
 	); err != nil {
-		app.redirectWithReturn(w, r, "/admin", "Could+not+save+result")
+		app.redirectWithReturn(w, r, "/admin", urlSafe(err.Error()))
 		return
 	}
-	app.logAdminActionFromRequest(r, "updated result", "game", gameID, fmt.Sprintf("Saved result %d-%d", team1Score, team2Score))
-
-	app.redirectWithReturn(w, r, "/admin", "Result+saved")
+	app.redirectWithReturn(w, r, "/admin", "Result+request+processed")
 }
 
 func (app *App) recordGoal(w http.ResponseWriter, r *http.Request) {
@@ -1253,11 +1302,12 @@ func (app *App) recordGoalForContext(w http.ResponseWriter, r *http.Request, gam
 		return
 	}
 
-	scorerID, err := strconv.Atoi(r.FormValue("scorer_id"))
-	if err != nil || scorerID == 0 {
-		app.redirectWithReturn(w, r, fallbackPath(publicRef), "Choose+a+valid+scorer")
-		return
+	scorerID, _ := strconv.Atoi(r.FormValue("scorer_id"))
+	goalKind := strings.TrimSpace(r.FormValue("goal_kind"))
+	if goalKind == "" {
+		goalKind = "player"
 	}
+	teamID, _ := strconv.Atoi(r.FormValue("team_id"))
 	minute, _ := strconv.Atoi(r.FormValue("minute"))
 
 	tx, err := app.db.Begin()
@@ -1269,7 +1319,7 @@ func (app *App) recordGoalForContext(w http.ResponseWriter, r *http.Request, gam
 
 	var status string
 	var team1ID, team2ID int
-	var scorerName string
+	var scorerName, teamName string
 	var team1Players, team2Players [2]int
 	if err := tx.QueryRow(`
 		SELECT
@@ -1288,36 +1338,48 @@ func (app *App) recordGoalForContext(w http.ResponseWriter, r *http.Request, gam
 		return
 	}
 
-	scorerTeamID := 0
-	for _, playerID := range team1Players {
-		if scorerID == playerID {
-			scorerTeamID = team1ID
+	scoringTeamID := teamID
+	if goalKind == "player" {
+		for _, playerID := range team1Players {
+			if scorerID == playerID {
+				scoringTeamID = team1ID
+			}
 		}
-	}
-	for _, playerID := range team2Players {
-		if scorerID == playerID {
-			scorerTeamID = team2ID
+		for _, playerID := range team2Players {
+			if scorerID == playerID {
+				scoringTeamID = team2ID
+			}
 		}
-	}
-	if scorerTeamID == 0 {
-		app.redirectWithReturn(w, r, fallbackPath(publicRef), "That+player+is+not+in+this+game")
-		return
-	}
-	if err := tx.QueryRow(`SELECT name FROM players WHERE id = ?`, scorerID).Scan(&scorerName); err != nil {
-		app.redirectWithReturn(w, r, fallbackPath(publicRef), "Scorer+not+found")
-		return
+		if scoringTeamID == 0 {
+			app.redirectWithReturn(w, r, fallbackPath(publicRef), "That+player+is+not+in+this+game")
+			return
+		}
+		if err := tx.QueryRow(`SELECT name FROM players WHERE id = ?`, scorerID).Scan(&scorerName); err != nil {
+			app.redirectWithReturn(w, r, fallbackPath(publicRef), "Scorer+not+found")
+			return
+		}
+	} else {
+		if teamID != team1ID && teamID != team2ID {
+			app.redirectWithReturn(w, r, fallbackPath(publicRef), "Choose+which+team+gets+the+neutral+goal")
+			return
+		}
+		if err := tx.QueryRow(`SELECT name FROM teams WHERE id = ?`, teamID).Scan(&teamName); err != nil {
+			app.redirectWithReturn(w, r, fallbackPath(publicRef), "Team+not+found")
+			return
+		}
+		scorerID = 0
 	}
 
 	if _, err := tx.Exec(
-		`INSERT INTO goal_events (game_id, scorer_id, recorded_by, minute) VALUES (?, ?, ?, ?)`,
-		gameID, scorerID, nullableInt(recordedBy), minute,
+		`INSERT INTO goal_events (game_id, scorer_id, team_id, goal_kind, note, recorded_by, minute) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		gameID, nullableInt(scorerID), scoringTeamID, goalKind, map[bool]string{true: "Own goal / neutral goal", false: ""}[goalKind != "player"], nullableInt(recordedBy), minute,
 	); err != nil {
 		app.serverError(w, err)
 		return
 	}
 
 	scoreColumn := "team2_score"
-	if scorerTeamID == team1ID {
+	if scoringTeamID == team1ID {
 		scoreColumn = "team1_score"
 	}
 	if minute < 0 {
@@ -1336,9 +1398,58 @@ func (app *App) recordGoalForContext(w http.ResponseWriter, r *http.Request, gam
 	}
 
 	if !publicRef {
-		app.logAdminActionFromRequest(r, "recorded goal", "game", gameID, fmt.Sprintf("Recorded goal for %s in game #%d", scorerName, gameID))
+		label := scorerName
+		if goalKind != "player" {
+			label = teamName + " (neutral own goal)"
+		}
+		app.logAdminActionFromRequest(r, "recorded goal", "game", gameID, fmt.Sprintf("Recorded goal for %s in game #%d", label, gameID))
 	}
 	app.redirectWithReturn(w, r, fallbackPath(publicRef), "Goal+recorded")
+}
+
+func (app *App) deleteGoalEvent(w http.ResponseWriter, r *http.Request) {
+	gameID, err := parseGameID(r.URL.Path, "delete-goal")
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		app.serverError(w, err)
+		return
+	}
+	goalID, err := strconv.Atoi(r.FormValue("goal_id"))
+	if err != nil || goalID == 0 {
+		app.redirectWithReturn(w, r, "/admin", "Choose+a+valid+goal+to+delete")
+		return
+	}
+	session, _ := app.currentSession(r)
+	if err := app.submitChangeRequest(
+		r,
+		session.PlayerID,
+		"delete_goal",
+		"goal",
+		goalID,
+		strconv.Itoa(gameID),
+		fmt.Sprintf("Delete goal #%d from game #%d", goalID, gameID),
+		func() error {
+			tx, err := app.db.Begin()
+			if err != nil {
+				return err
+			}
+			defer tx.Rollback()
+			if _, err := tx.Exec(`DELETE FROM goal_events WHERE id = ? AND game_id = ?`, goalID, gameID); err != nil {
+				return err
+			}
+			if err := rebuildGameScoreTx(tx, gameID); err != nil {
+				return err
+			}
+			return tx.Commit()
+		},
+	); err != nil {
+		app.redirectWithReturn(w, r, "/admin", urlSafe(err.Error()))
+		return
+	}
+	app.redirectWithReturn(w, r, "/admin", "Goal+delete+request+processed")
 }
 
 func (app *App) cancelGame(w http.ResponseWriter, r *http.Request) {
@@ -1427,6 +1538,68 @@ func (app *App) updateStatsConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	app.logAdminActionFromRequest(r, "updated stats config", "settings", 0, fmt.Sprintf("Set stats widgets=%s strikers=%d defenders=%d", strings.Join(statsWidgets, ","), limit, defenderLimit))
 	app.redirectWithReturn(w, r, "/admin", "Stats+display+updated")
+}
+
+func (app *App) updateTournamentSettings(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseForm(); err != nil {
+		app.serverError(w, err)
+		return
+	}
+	start := strings.TrimSpace(r.FormValue("tournament_start"))
+	end := strings.TrimSpace(r.FormValue("tournament_end"))
+	if start != "" {
+		if _, err := time.ParseInLocation("2006-01-02", start, kenyaLocation); err != nil {
+			app.redirectWithReturn(w, r, "/admin", "Choose+a+valid+tournament+start+date")
+			return
+		}
+	}
+	if end != "" {
+		parsedEnd, err := time.ParseInLocation("2006-01-02", end, kenyaLocation)
+		if err != nil {
+			app.redirectWithReturn(w, r, "/admin", "Choose+a+valid+tournament+end+date")
+			return
+		}
+		if start != "" {
+			parsedStart, _ := time.ParseInLocation("2006-01-02", start, kenyaLocation)
+			if parsedEnd.Before(parsedStart) {
+				app.redirectWithReturn(w, r, "/admin", "Tournament+end+must+be+after+the+start")
+				return
+			}
+		}
+	}
+
+	for key, value := range map[string]string{
+		"tournament_start": start,
+		"tournament_end": end,
+	} {
+		if _, err := app.db.Exec(
+			`INSERT INTO settings (key, value, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)
+			 ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP`,
+			key, value,
+		); err != nil {
+			app.serverError(w, err)
+			return
+		}
+	}
+
+	app.logAdminActionFromRequest(r, "updated tournament window", "settings", 0, fmt.Sprintf("Set tournament start=%s end=%s", start, end))
+	app.redirectWithReturn(w, r, "/admin", "Tournament+window+updated")
+}
+
+func rebuildGameScoreTx(tx *sql.Tx, gameID int) error {
+	var team1ID, team2ID int
+	if err := tx.QueryRow(`SELECT team1_id, team2_id FROM games WHERE id = ?`, gameID).Scan(&team1ID, &team2ID); err != nil {
+		return err
+	}
+	var team1Score, team2Score int
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM goal_events WHERE game_id = ? AND team_id = ?`, gameID, team1ID).Scan(&team1Score); err != nil {
+		return err
+	}
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM goal_events WHERE game_id = ? AND team_id = ?`, gameID, team2ID).Scan(&team2Score); err != nil {
+		return err
+	}
+	_, err := tx.Exec(`UPDATE games SET team1_score = ?, team2_score = ? WHERE id = ?`, team1Score, team2Score, gameID)
+	return err
 }
 
 func (app *App) createBackup(w http.ResponseWriter, r *http.Request) {
@@ -1584,7 +1757,20 @@ func (app *App) deletePlayer(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if _, err := tx.Exec(`DELETE FROM games WHERE team1_player1_id = ? OR team1_player2_id = ? OR team2_player1_id = ? OR team2_player2_id = ?`, playerID, playerID, playerID, playerID); err != nil {
+	matchSelector := `SELECT id FROM games WHERE team1_player1_id = ? OR team1_player2_id = ? OR team2_player1_id = ? OR team2_player2_id = ?`
+	if _, err := tx.Exec(`DELETE FROM goal_events WHERE scorer_id = ? OR game_id IN (`+matchSelector+`)`, append([]any{playerID}, playerID, playerID, playerID, playerID)...); err != nil {
+		app.serverError(w, err)
+		return
+	}
+	if _, err := tx.Exec(`DELETE FROM game_role_events WHERE player_id = ? OR game_id IN (`+matchSelector+`)`, append([]any{playerID}, playerID, playerID, playerID, playerID)...); err != nil {
+		app.serverError(w, err)
+		return
+	}
+	if _, err := tx.Exec(`DELETE FROM referee_codes WHERE game_id IN (`+matchSelector+`)`, playerID, playerID, playerID, playerID); err != nil {
+		app.serverError(w, err)
+		return
+	}
+	if _, err := tx.Exec(`DELETE FROM games WHERE id IN (`+matchSelector+`)`, playerID, playerID, playerID, playerID); err != nil {
 		app.serverError(w, err)
 		return
 	}
@@ -1611,14 +1797,40 @@ func (app *App) deleteGame(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-
-	if _, err := app.db.Exec(`DELETE FROM games WHERE id = ?`, gameID); err != nil {
-		app.redirectWithReturn(w, r, "/admin", "Could+not+delete+game")
+	session, _ := app.currentSession(r)
+	if err := app.submitChangeRequest(
+		r,
+		session.PlayerID,
+		"delete_game",
+		"game",
+		gameID,
+		"",
+		fmt.Sprintf("Delete game #%d and its goals", gameID),
+		func() error {
+			tx, err := app.db.Begin()
+			if err != nil {
+				return err
+			}
+			defer tx.Rollback()
+			if _, err := tx.Exec(`DELETE FROM goal_events WHERE game_id = ?`, gameID); err != nil {
+				return err
+			}
+			if _, err := tx.Exec(`DELETE FROM game_role_events WHERE game_id = ?`, gameID); err != nil {
+				return err
+			}
+			if _, err := tx.Exec(`DELETE FROM referee_codes WHERE game_id = ?`, gameID); err != nil {
+				return err
+			}
+			if _, err := tx.Exec(`DELETE FROM games WHERE id = ?`, gameID); err != nil {
+				return err
+			}
+			return tx.Commit()
+		},
+	); err != nil {
+		app.redirectWithReturn(w, r, "/admin", urlSafe(err.Error()))
 		return
 	}
-
-	app.logAdminActionFromRequest(r, "deleted game", "game", gameID, "Deleted game permanently")
-	app.redirectWithReturn(w, r, "/admin", "Game+deleted")
+	app.redirectWithReturn(w, r, "/admin", "Delete+request+processed")
 }
 
 func (app *App) renderAdmin(w http.ResponseWriter, r *http.Request) {
@@ -1641,6 +1853,18 @@ func (app *App) renderAdmin(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		app.serverError(w, err)
 		return
+	}
+	gameIDs := make([]int, 0, len(games))
+	for _, game := range games {
+		gameIDs = append(gameIDs, game.ID)
+	}
+	goalEvents, err := app.listGoalEvents(gameIDs)
+	if err != nil {
+		app.serverError(w, err)
+		return
+	}
+	for i := range games {
+		games[i].GoalEvents = goalEvents[games[i].ID]
 	}
 	standings, err := app.listStandings()
 	if err != nil {
@@ -1691,6 +1915,16 @@ func (app *App) renderAdmin(w http.ResponseWriter, r *http.Request) {
 		app.serverError(w, err)
 		return
 	}
+	tournamentStart, tournamentEnd, err := app.getTournamentSettings()
+	if err != nil {
+		app.serverError(w, err)
+		return
+	}
+	pendingChanges, err := app.listPendingChangeRequests()
+	if err != nil {
+		app.serverError(w, err)
+		return
+	}
 
 	data := app.baseData(r, "Admin Dashboard", "admin_dashboard")
 	data.SearchQuery = logQuery
@@ -1708,6 +1942,9 @@ func (app *App) renderAdmin(w http.ResponseWriter, r *http.Request) {
 		StatsLimit:    statsLimit,
 		DefenderLimit: defenderLimit,
 		StatsWidgets:  statsWidgets,
+		TournamentStart: tournamentStart,
+		TournamentEnd:   tournamentEnd,
+		PendingChanges:  pendingChanges,
 	}
 	app.render(w, data)
 }
@@ -1915,6 +2152,28 @@ func (app *App) initSchema() error {
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 			FOREIGN KEY (admin_id) REFERENCES players(id)
 		);`,
+		`CREATE TABLE IF NOT EXISTS change_requests (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			action TEXT NOT NULL,
+			target_type TEXT NOT NULL,
+			target_id INTEGER NOT NULL DEFAULT 0,
+			payload TEXT NOT NULL DEFAULT '',
+			details TEXT NOT NULL DEFAULT '',
+			requested_by INTEGER NOT NULL,
+			status TEXT NOT NULL DEFAULT 'pending',
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			executed_at DATETIME,
+			FOREIGN KEY (requested_by) REFERENCES players(id)
+		);`,
+		`CREATE TABLE IF NOT EXISTS change_request_approvals (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			request_id INTEGER NOT NULL,
+			admin_id INTEGER NOT NULL,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			UNIQUE(request_id, admin_id),
+			FOREIGN KEY (request_id) REFERENCES change_requests(id),
+			FOREIGN KEY (admin_id) REFERENCES players(id)
+		);`,
 		`DROP VIEW IF EXISTS standings;`,
 		`CREATE VIEW standings AS
 		SELECT
@@ -1972,6 +2231,12 @@ func (app *App) initSchema() error {
 
 	if _, err := app.db.Exec(`UPDATE players SET admin_status = CASE WHEN is_admin = 1 THEN 'approved' ELSE COALESCE(admin_status, 'none') END WHERE admin_status IS NULL OR admin_status = ''`); err != nil {
 		return fmt.Errorf("sync admin status: %w", err)
+	}
+	if err := app.migrateGoalEventsSchema(); err != nil {
+		return err
+	}
+	if err := app.ensureTournamentSettings(); err != nil {
+		return err
 	}
 
 	return nil
@@ -2126,11 +2391,17 @@ func (app *App) seedData() error {
 	if _, err := tx.Exec(`INSERT INTO settings (key, value) VALUES ('stats_widgets', ?)`, strings.Join(defaultStatsWidgets(), ",")); err != nil {
 		return err
 	}
+	if _, err := tx.Exec(`INSERT INTO settings (key, value) VALUES ('tournament_start', '')`); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`INSERT INTO settings (key, value) VALUES ('tournament_end', '')`); err != nil {
+		return err
+	}
 
 	return tx.Commit()
 }
 
-func (app *App) listGames(whereClause, orderClause string, limit int) ([]GameView, error) {
+func (app *App) listGames(whereClause, orderClause string, limit int, args ...any) ([]GameView, error) {
 	query := `
 		SELECT
 			g.id, g.game_type, g.status,
@@ -2161,7 +2432,7 @@ func (app *App) listGames(whereClause, orderClause string, limit int) ([]GameVie
 		query += fmt.Sprintf(" LIMIT %d", limit)
 	}
 
-	rows, err := app.db.Query(query)
+	rows, err := app.db.Query(query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -2309,10 +2580,147 @@ func (app *App) listPlayers() ([]Player, error) {
 	return players, rows.Err()
 }
 
+func (app *App) listGoalEvents(gameIDs []int) (map[int][]GoalEvent, error) {
+	if len(gameIDs) == 0 {
+		return map[int][]GoalEvent{}, nil
+	}
+	placeholders := make([]string, 0, len(gameIDs))
+	args := make([]any, 0, len(gameIDs))
+	for _, id := range gameIDs {
+		placeholders = append(placeholders, "?")
+		args = append(args, id)
+	}
+	query := `
+		SELECT
+			ge.id,
+			ge.game_id,
+			COALESCE(ge.scorer_id, 0),
+			COALESCE(p.name, ''),
+			ge.team_id,
+			COALESCE(t.name, ''),
+			COALESCE(ge.minute, 0),
+			COALESCE(ge.goal_kind, 'player'),
+			COALESCE(ge.created_at, '')
+		FROM goal_events ge
+		LEFT JOIN players p ON p.id = ge.scorer_id
+		LEFT JOIN teams t ON t.id = ge.team_id
+		WHERE ge.game_id IN (` + strings.Join(placeholders, ",") + `)
+		ORDER BY ge.game_id ASC, ge.minute ASC, ge.id ASC
+	`
+	rows, err := app.db.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	items := make(map[int][]GoalEvent)
+	for rows.Next() {
+		var item GoalEvent
+		var createdRaw string
+		if err := rows.Scan(&item.ID, &item.GameID, &item.ScorerID, &item.ScorerName, &item.TeamID, &item.TeamName, &item.Minute, &item.GoalKind, &createdRaw); err != nil {
+			return nil, err
+		}
+		item.RecordedAt = formatDateTime(createdRaw)
+		item.DisplayLabel = item.ScorerName
+		if item.GoalKind != "player" || item.DisplayLabel == "" {
+			item.DisplayLabel = item.TeamName + " (neutral own goal)"
+		}
+		items[item.GameID] = append(items[item.GameID], item)
+	}
+	return items, rows.Err()
+}
+
+func (app *App) listTournamentStandings(start, end string) ([]Standing, error) {
+	rows, err := app.db.Query(`
+		SELECT
+			t.id,
+			t.name,
+			COUNT(CASE WHEN g.status = 'played' THEN 1 END) AS games_played,
+			SUM(CASE
+				WHEN g.status = 'played' AND g.team1_id = t.id AND g.team1_score > g.team2_score THEN 1
+				WHEN g.status = 'played' AND g.team2_id = t.id AND g.team2_score > g.team1_score THEN 1
+				ELSE 0
+			END) AS wins,
+			SUM(CASE
+				WHEN g.status = 'played' AND g.team1_id = t.id AND g.team1_score = g.team2_score THEN 1
+				WHEN g.status = 'played' AND g.team2_id = t.id AND g.team2_score = g.team1_score THEN 1
+				ELSE 0
+			END) AS draws,
+			SUM(CASE
+				WHEN g.status = 'played' AND g.team1_id = t.id AND g.team1_score < g.team2_score THEN 1
+				WHEN g.status = 'played' AND g.team2_id = t.id AND g.team2_score < g.team1_score THEN 1
+				ELSE 0
+			END) AS losses,
+			SUM(CASE
+				WHEN g.status = 'played' AND g.team1_id = t.id THEN g.team1_score
+				WHEN g.status = 'played' AND g.team2_id = t.id THEN g.team2_score
+				ELSE 0
+			END) AS goals_for,
+			SUM(CASE
+				WHEN g.status = 'played' AND g.team1_id = t.id THEN g.team2_score
+				WHEN g.status = 'played' AND g.team2_id = t.id THEN g.team1_score
+				ELSE 0
+			END) AS goals_against
+		FROM teams t
+		LEFT JOIN games g
+			ON (g.team1_id = t.id OR g.team2_id = t.id)
+			AND `+tournamentSQLClause("g")+`
+		GROUP BY t.id, t.name
+		ORDER BY
+			((SUM(CASE
+				WHEN g.status = 'played' AND g.team1_id = t.id AND g.team1_score > g.team2_score THEN 1
+				WHEN g.status = 'played' AND g.team2_id = t.id AND g.team2_score > g.team1_score THEN 1
+				WHEN g.status = 'played' AND g.team1_id = t.id AND g.team1_score = g.team2_score THEN 0
+				WHEN g.status = 'played' AND g.team2_id = t.id AND g.team2_score = g.team1_score THEN 0
+				ELSE 0
+			END) * 3) + SUM(CASE
+				WHEN g.status = 'played' AND g.team1_id = t.id AND g.team1_score = g.team2_score THEN 1
+				WHEN g.status = 'played' AND g.team2_id = t.id AND g.team2_score = g.team1_score THEN 1
+				ELSE 0
+			END)) DESC,
+			(SUM(CASE
+				WHEN g.status = 'played' AND g.team1_id = t.id THEN g.team1_score
+				WHEN g.status = 'played' AND g.team2_id = t.id THEN g.team2_score
+				ELSE 0
+			END) - SUM(CASE
+				WHEN g.status = 'played' AND g.team1_id = t.id THEN g.team2_score
+				WHEN g.status = 'played' AND g.team2_id = t.id THEN g.team1_score
+				ELSE 0
+			END)) DESC,
+			t.name ASC
+	`, tournamentSQLArgs(start, end)...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var standings []Standing
+	for rows.Next() {
+		var item Standing
+		if err := rows.Scan(&item.ID, &item.Name, &item.GamesPlayed, &item.Wins, &item.Draws, &item.Losses, &item.GoalsFor, &item.GoalsAgainst); err != nil {
+			return nil, err
+		}
+		item.GoalDiff = item.GoalsFor - item.GoalsAgainst
+		item.Points = item.Wins*3 + item.Draws
+		if item.GamesPlayed >= 4 {
+			item.ShowWinRate = true
+			item.WinPercentage = fmt.Sprintf("%.0f%%", (float64(item.Wins)/float64(item.GamesPlayed))*100)
+		}
+		standings = append(standings, item)
+	}
+	return standings, rows.Err()
+}
+
 func (app *App) loadStats() (StatsView, error) {
 	var stats StatsView
+	startRaw, endRaw, err := app.getTournamentSettings()
+	if err != nil {
+		return stats, err
+	}
+	startBound, endBound := tournamentBounds(startRaw, endRaw)
+	args := tournamentSQLArgs(startBound, endBound)
 
-	standings, err := app.listStandings()
+	standings, err := app.listTournamentStandings(startBound, endBound)
 	if err != nil {
 		return stats, err
 	}
@@ -2333,10 +2741,10 @@ func (app *App) loadStats() (StatsView, error) {
 		stats.BestDefense = bestDefense.Name
 	}
 
-	if err := app.db.QueryRow(`SELECT COUNT(*) FROM games WHERE status = 'played'`).Scan(&stats.PlayedGamesCount); err != nil {
+	if err := app.db.QueryRow(`SELECT COUNT(*) FROM games g WHERE status = 'played' AND `+tournamentSQLClause("g"), args...).Scan(&stats.PlayedGamesCount); err != nil {
 		return stats, err
 	}
-	if err := app.db.QueryRow(`SELECT COUNT(*) FROM games WHERE status IN ('scheduled', 'live')`).Scan(&stats.ScheduledGamesCount); err != nil {
+	if err := app.db.QueryRow(`SELECT COUNT(*) FROM games g WHERE status IN ('scheduled', 'live') AND `+tournamentSQLClause("g"), args...).Scan(&stats.ScheduledGamesCount); err != nil {
 		return stats, err
 	}
 
@@ -2347,10 +2755,11 @@ func (app *App) loadStats() (StatsView, error) {
 		FROM players p
 		JOIN games g
 			ON p.id = g.team1_player1_id OR p.id = g.team1_player2_id OR p.id = g.team2_player1_id OR p.id = g.team2_player2_id
+		WHERE `+tournamentSQLClause("g")+`
 		GROUP BY p.id
 		ORDER BY appearances DESC, p.name ASC
 		LIMIT 1
-	`).Scan(&playerName, &gameCount)
+	`, args...).Scan(&playerName, &gameCount)
 	if err == nil {
 		stats.MostActivePlayer = playerName
 		stats.MostActiveGames = gameCount
@@ -2384,7 +2793,7 @@ func (app *App) loadStats() (StatsView, error) {
 	}
 
 	var topGame GameView
-	games, err := app.listGames("WHERE g.status = 'played'", "ORDER BY (g.team1_score + g.team2_score) DESC, g.played_date DESC", 1)
+	games, err := app.listGames("WHERE g.status = 'played' AND "+tournamentSQLClause("g"), "ORDER BY (g.team1_score + g.team2_score) DESC, g.played_date DESC", 1, args...)
 	if err != nil {
 		return stats, err
 	}
@@ -2404,6 +2813,135 @@ func (app *App) getRules() (string, error) {
 		return "", nil
 	}
 	return rules, err
+}
+
+func (app *App) ensureTournamentSettings() error {
+	for _, key := range []string{"tournament_start", "tournament_end"} {
+		if _, err := app.db.Exec(
+			`INSERT INTO settings (key, value, updated_at) VALUES (?, '', CURRENT_TIMESTAMP)
+			 ON CONFLICT(key) DO NOTHING`,
+			key,
+		); err != nil {
+			return fmt.Errorf("ensure %s setting: %w", key, err)
+		}
+	}
+	return nil
+}
+
+func (app *App) getTournamentSettings() (string, string, error) {
+	var start, end string
+	if err := app.db.QueryRow(`SELECT COALESCE(value, '') FROM settings WHERE key = 'tournament_start'`).Scan(&start); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return "", "", err
+	}
+	if err := app.db.QueryRow(`SELECT COALESCE(value, '') FROM settings WHERE key = 'tournament_end'`).Scan(&end); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return "", "", err
+	}
+	return strings.TrimSpace(start), strings.TrimSpace(end), nil
+}
+
+func tournamentBounds(start, end string) (string, string) {
+	start = strings.TrimSpace(start)
+	end = strings.TrimSpace(end)
+	if end == "" {
+		return start, ""
+	}
+	parsed, err := time.ParseInLocation("2006-01-02", end, kenyaLocation)
+	if err != nil {
+		return start, ""
+	}
+	return start, parsed.Add(24 * time.Hour).Format("2006-01-02")
+}
+
+func tournamentSQLArgs(start, end string) []any {
+	return []any{start, start, end, end}
+}
+
+func tournamentSQLClause(alias string) string {
+	return fmt.Sprintf(`(? = '' OR COALESCE(%s.played_date, %s.scheduled_date, '') >= ?) AND (? = '' OR COALESCE(%s.played_date, %s.scheduled_date, '') < ?)`, alias, alias, alias, alias)
+}
+
+func (app *App) migrateGoalEventsSchema() error {
+	rows, err := app.db.Query(`PRAGMA table_info(goal_events)`)
+	if err != nil {
+		return fmt.Errorf("inspect goal_events schema: %w", err)
+	}
+	defer rows.Close()
+
+	hasTeamID := false
+	hasGoalKind := false
+	for rows.Next() {
+		var cid int
+		var name, dataType string
+		var notNull, pk int
+		var defaultValue any
+		if err := rows.Scan(&cid, &name, &dataType, &notNull, &defaultValue, &pk); err != nil {
+			return fmt.Errorf("read goal_events schema: %w", err)
+		}
+		switch name {
+		case "team_id":
+			hasTeamID = true
+		case "goal_kind":
+			hasGoalKind = true
+		}
+	}
+	if hasTeamID && hasGoalKind {
+		return nil
+	}
+
+	tx, err := app.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.Exec(`
+		CREATE TABLE goal_events_new (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			game_id INTEGER NOT NULL,
+			scorer_id INTEGER,
+			team_id INTEGER NOT NULL,
+			goal_kind TEXT NOT NULL DEFAULT 'player',
+			note TEXT NOT NULL DEFAULT '',
+			recorded_by INTEGER,
+			minute INTEGER DEFAULT 0,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			FOREIGN KEY (game_id) REFERENCES games(id),
+			FOREIGN KEY (scorer_id) REFERENCES players(id),
+			FOREIGN KEY (team_id) REFERENCES teams(id),
+			FOREIGN KEY (recorded_by) REFERENCES players(id)
+		)
+	`); err != nil {
+		return fmt.Errorf("create goal_events migration table: %w", err)
+	}
+
+	if _, err := tx.Exec(`
+		INSERT INTO goal_events_new (id, game_id, scorer_id, team_id, goal_kind, note, recorded_by, minute, created_at)
+		SELECT
+			ge.id,
+			ge.game_id,
+			ge.scorer_id,
+			CASE
+				WHEN ge.scorer_id IN (COALESCE(g.team1_player1_id, 0), COALESCE(g.team1_player2_id, 0)) THEN g.team1_id
+				ELSE g.team2_id
+			END,
+			'player',
+			'',
+			ge.recorded_by,
+			COALESCE(ge.minute, 0),
+			ge.created_at
+		FROM goal_events ge
+		JOIN games g ON g.id = ge.game_id
+	`); err != nil {
+		return fmt.Errorf("copy goal_events data: %w", err)
+	}
+
+	if _, err := tx.Exec(`DROP TABLE goal_events`); err != nil {
+		return fmt.Errorf("drop old goal_events: %w", err)
+	}
+	if _, err := tx.Exec(`ALTER TABLE goal_events_new RENAME TO goal_events`); err != nil {
+		return fmt.Errorf("rename migrated goal_events: %w", err)
+	}
+	return tx.Commit()
 }
 
 func (app *App) getStatsLimit() (int, error) {
@@ -2495,6 +3033,12 @@ func normalizeStatsWidgets(raw string) []string {
 }
 
 func (app *App) loadStrikerLeaders(limit int) ([]PlayerStat, error) {
+	startRaw, endRaw, err := app.getTournamentSettings()
+	if err != nil {
+		return nil, err
+	}
+	startBound, endBound := tournamentBounds(startRaw, endRaw)
+
 	rows, err := app.db.Query(`
 		SELECT p.name, COALESCE(t.name, ''), COALESCE(goals.goals, 0), COALESCE(minutes.minutes, 0)
 		FROM players p
@@ -2502,12 +3046,16 @@ func (app *App) loadStrikerLeaders(limit int) ([]PlayerStat, error) {
 		LEFT JOIN (
 			SELECT ge.scorer_id AS player_id, COUNT(*) AS goals
 			FROM goal_events ge
+			JOIN games g ON g.id = ge.game_id
 			JOIN game_role_events gre
 				ON gre.game_id = ge.game_id
 				AND gre.player_id = ge.scorer_id
 				AND gre.role = 'striker'
 				AND ge.minute >= gre.start_minute
 				AND (gre.end_minute IS NULL OR ge.minute < gre.end_minute)
+			WHERE ge.goal_kind = 'player'
+			  AND ge.scorer_id IS NOT NULL
+			  AND `+tournamentSQLClause("g")+`
 			GROUP BY ge.scorer_id
 		) goals ON goals.player_id = p.id
 		LEFT JOIN (
@@ -2525,12 +3073,13 @@ func (app *App) loadStrikerLeaders(limit int) ([]PlayerStat, error) {
 			FROM game_role_events gre
 			JOIN games g ON g.id = gre.game_id
 			WHERE gre.role = 'striker'
+			  AND `+tournamentSQLClause("g")+`
 			GROUP BY gre.player_id
 		) minutes ON minutes.player_id = p.id
 		WHERE COALESCE(goals.goals, 0) > 0 OR COALESCE(minutes.minutes, 0) > 0
 		ORDER BY COALESCE(goals.goals, 0) DESC, COALESCE(minutes.minutes, 0) DESC, p.name ASC
 		LIMIT ?
-	`, limit)
+	`, append(tournamentSQLArgs(startBound, endBound), append(tournamentSQLArgs(startBound, endBound), limit)...)...)
 	if err != nil {
 		return nil, err
 	}
@@ -2548,6 +3097,11 @@ func (app *App) loadStrikerLeaders(limit int) ([]PlayerStat, error) {
 }
 
 func (app *App) loadDefenderLeaders(limit int) ([]PlayerStat, error) {
+	startRaw, endRaw, err := app.getTournamentSettings()
+	if err != nil {
+		return nil, err
+	}
+	startBound, endBound := tournamentBounds(startRaw, endRaw)
 	rows, err := app.db.Query(`
 		SELECT p.name, COALESCE(t.name, ''), COALESCE(def.conceded, 0), COALESCE(minutes.minutes, 0)
 		FROM players p
@@ -2561,11 +3115,12 @@ func (app *App) loadDefenderLeaders(limit int) ([]PlayerStat, error) {
 				AND ge.minute >= gre.start_minute
 				AND (gre.end_minute IS NULL OR ge.minute < gre.end_minute)
 				AND (
-					(gre.team_id = g.team1_id AND ge.scorer_id IN (COALESCE(g.team2_player1_id, 0), COALESCE(g.team2_player2_id, 0)))
+					(gre.team_id = g.team1_id AND ge.team_id = g.team2_id)
 					OR
-					(gre.team_id = g.team2_id AND ge.scorer_id IN (COALESCE(g.team1_player1_id, 0), COALESCE(g.team1_player2_id, 0)))
+					(gre.team_id = g.team2_id AND ge.team_id = g.team1_id)
 				)
 			WHERE gre.role = 'defender'
+			  AND `+tournamentSQLClause("g")+`
 			GROUP BY gre.player_id
 		) def ON def.player_id = p.id
 		LEFT JOIN (
@@ -2583,12 +3138,13 @@ func (app *App) loadDefenderLeaders(limit int) ([]PlayerStat, error) {
 			FROM game_role_events gre
 			JOIN games g ON g.id = gre.game_id
 			WHERE gre.role = 'defender'
+			  AND `+tournamentSQLClause("g")+`
 			GROUP BY gre.player_id
 		) minutes ON minutes.player_id = p.id
 		WHERE COALESCE(def.conceded, 0) > 0 OR COALESCE(minutes.minutes, 0) > 0
 		ORDER BY COALESCE(def.conceded, 0) ASC, COALESCE(minutes.minutes, 0) DESC, p.name ASC
 		LIMIT ?
-	`, limit)
+	`, append(tournamentSQLArgs(startBound, endBound), append(tournamentSQLArgs(startBound, endBound), limit)...)...)
 	if err != nil {
 		return nil, err
 	}
@@ -2654,6 +3210,219 @@ func (app *App) logAdminActionFromRequest(r *http.Request, action, targetType st
 		return
 	}
 	app.logAdminAction(session.PlayerID, action, targetType, targetID, details)
+}
+
+func (app *App) approvedAdminCount() (int, error) {
+	var count int
+	err := app.db.QueryRow(`SELECT COUNT(*) FROM players WHERE is_admin = 1 AND COALESCE(admin_status, 'none') = 'approved'`).Scan(&count)
+	return count, err
+}
+
+func requiredAdminApprovals(adminCount int) int {
+	if adminCount <= 1 {
+		return 1
+	}
+	required := (adminCount + 1) / 2
+	if required < 2 {
+		required = 2
+	}
+	return required
+}
+
+func (app *App) submitChangeRequest(r *http.Request, adminID int, action, targetType string, targetID int, payload, details string, apply func() error) error {
+	adminCount, err := app.approvedAdminCount()
+	if err != nil {
+		return err
+	}
+	if adminCount <= 1 {
+		if err := apply(); err != nil {
+			return err
+		}
+		app.logAdminAction(adminID, action, targetType, targetID, details)
+		return nil
+	}
+
+	tx, err := app.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	var requestID int
+	err = tx.QueryRow(`
+		SELECT id
+		FROM change_requests
+		WHERE status = 'pending' AND action = ? AND target_type = ? AND target_id = ? AND payload = ?
+		ORDER BY id DESC
+		LIMIT 1
+	`, action, targetType, targetID, payload).Scan(&requestID)
+	if errors.Is(err, sql.ErrNoRows) {
+		result, err := tx.Exec(
+			`INSERT INTO change_requests (action, target_type, target_id, payload, details, requested_by) VALUES (?, ?, ?, ?, ?, ?)`,
+			action, targetType, targetID, payload, details, adminID,
+		)
+		if err != nil {
+			return err
+		}
+		insertedID, _ := result.LastInsertId()
+		requestID = int(insertedID)
+	} else if err != nil {
+		return err
+	}
+
+	if _, err := tx.Exec(`INSERT OR IGNORE INTO change_request_approvals (request_id, admin_id) VALUES (?, ?)`, requestID, adminID); err != nil {
+		return err
+	}
+
+	var approvals int
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM change_request_approvals WHERE request_id = ?`, requestID).Scan(&approvals); err != nil {
+		return err
+	}
+	required := requiredAdminApprovals(adminCount)
+	if approvals < required {
+		if err := tx.Commit(); err != nil {
+			return err
+		}
+		app.logAdminAction(adminID, "requested "+action, targetType, targetID, fmt.Sprintf("%s (%d/%d approvals)", details, approvals, required))
+		return nil
+	}
+
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	if err := apply(); err != nil {
+		return err
+	}
+	if _, err := app.db.Exec(`UPDATE change_requests SET status = 'executed', executed_at = CURRENT_TIMESTAMP WHERE id = ?`, requestID); err != nil {
+		return err
+	}
+	app.logAdminAction(adminID, action, targetType, targetID, fmt.Sprintf("%s (%d/%d approvals)", details, approvals, required))
+	return nil
+}
+
+func (app *App) listPendingChangeRequests() ([]ChangeRequest, error) {
+	adminCount, err := app.approvedAdminCount()
+	if err != nil {
+		return nil, err
+	}
+	required := requiredAdminApprovals(adminCount)
+	rows, err := app.db.Query(`
+		SELECT
+			cr.id,
+			cr.action,
+			cr.target_type,
+			cr.target_id,
+			cr.details,
+			COALESCE(p.name, 'Deleted admin'),
+			COALESCE(cr.created_at, ''),
+			COUNT(cra.id) AS approvals
+		FROM change_requests cr
+		LEFT JOIN players p ON p.id = cr.requested_by
+		LEFT JOIN change_request_approvals cra ON cra.request_id = cr.id
+		WHERE cr.status = 'pending'
+		GROUP BY cr.id, cr.action, cr.target_type, cr.target_id, cr.details, p.name, cr.created_at
+		ORDER BY cr.created_at DESC, cr.id DESC
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var requests []ChangeRequest
+	for rows.Next() {
+		var item ChangeRequest
+		var createdRaw string
+		if err := rows.Scan(&item.ID, &item.Action, &item.TargetType, &item.TargetID, &item.Details, &item.RequestedBy, &createdRaw, &item.Approvals); err != nil {
+			return nil, err
+		}
+		item.CreatedAt = formatDateTime(createdRaw)
+		item.RequiredCount = required
+		requests = append(requests, item)
+	}
+	return requests, rows.Err()
+}
+
+func (app *App) approveChangeRequest(w http.ResponseWriter, r *http.Request) {
+	requestID, err := parseEntityID(r.URL.Path, "/admin/change-requests/", "approve")
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	session, _ := app.currentSession(r)
+	var action, targetType, payload, details string
+	var targetID int
+	if err := app.db.QueryRow(`SELECT action, target_type, target_id, payload, details FROM change_requests WHERE id = ? AND status = 'pending'`, requestID).Scan(&action, &targetType, &targetID, &payload, &details); err != nil {
+		app.redirectWithReturn(w, r, "/admin", "Approval+request+not+found")
+		return
+	}
+	if err := app.submitChangeRequest(r, session.PlayerID, action, targetType, targetID, payload, details, func() error {
+		return app.executeChange(action, targetID, payload)
+	}); err != nil {
+		app.redirectWithReturn(w, r, "/admin", urlSafe(err.Error()))
+		return
+	}
+	app.redirectWithReturn(w, r, "/admin", "Approval+recorded")
+}
+
+func (app *App) executeChange(action string, targetID int, payload string) error {
+	switch action {
+	case "delete_goal":
+		gameID, _ := strconv.Atoi(payload)
+		tx, err := app.db.Begin()
+		if err != nil {
+			return err
+		}
+		defer tx.Rollback()
+		if _, err := tx.Exec(`DELETE FROM goal_events WHERE id = ? AND game_id = ?`, targetID, gameID); err != nil {
+			return err
+		}
+		if err := rebuildGameScoreTx(tx, gameID); err != nil {
+			return err
+		}
+		return tx.Commit()
+	case "update_result":
+		parts := strings.SplitN(payload, ":", 2)
+		if len(parts) != 2 {
+			return errors.New("invalid result payload")
+		}
+		team1Score, err := strconv.Atoi(parts[0])
+		if err != nil {
+			return err
+		}
+		team2Score, err := strconv.Atoi(parts[1])
+		if err != nil {
+			return err
+		}
+		_, err = app.db.Exec(
+			`UPDATE games
+			 SET team1_score = ?, team2_score = ?, status = 'played', played_date = ?, live_paused = 0,
+			     live_minute = CASE WHEN live_minute > 0 THEN live_minute ELSE 90 END
+			 WHERE id = ?`,
+			team1Score, team2Score, time.Now().Format(time.RFC3339), targetID,
+		)
+		return err
+	case "delete_game":
+		tx, err := app.db.Begin()
+		if err != nil {
+			return err
+		}
+		defer tx.Rollback()
+		if _, err := tx.Exec(`DELETE FROM goal_events WHERE game_id = ?`, targetID); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(`DELETE FROM game_role_events WHERE game_id = ?`, targetID); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(`DELETE FROM referee_codes WHERE game_id = ?`, targetID); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(`DELETE FROM games WHERE id = ?`, targetID); err != nil {
+			return err
+		}
+		return tx.Commit()
+	default:
+		return fmt.Errorf("unsupported change action %s", action)
+	}
 }
 
 func (app *App) approvedAdminRank(playerID int) (int, error) {
@@ -2927,6 +3696,20 @@ func (app *App) cleanupOrphanedAdminReferences() error {
 		  )
 	`); err != nil {
 		return fmt.Errorf("clear orphaned admin approvals: %w", err)
+	}
+	return nil
+}
+
+func (app *App) cleanupOrphanedMatchData() error {
+	statements := []string{
+		`DELETE FROM goal_events WHERE NOT EXISTS (SELECT 1 FROM games WHERE games.id = goal_events.game_id)`,
+		`DELETE FROM game_role_events WHERE NOT EXISTS (SELECT 1 FROM games WHERE games.id = game_role_events.game_id)`,
+		`DELETE FROM referee_codes WHERE NOT EXISTS (SELECT 1 FROM games WHERE games.id = referee_codes.game_id)`,
+	}
+	for _, statement := range statements {
+		if _, err := app.db.Exec(statement); err != nil {
+			return err
+		}
 	}
 	return nil
 }

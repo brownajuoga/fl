@@ -170,6 +170,22 @@
     </article>
 
     <article class="card admin-card">
+        <h2>Tournament Window</h2>
+        <form class="stack" method="post" action="/admin/tournament">
+            <label>
+                <span>Tournament start</span>
+                <input type="date" name="tournament_start" value="{{.Dashboard.TournamentStart}}">
+            </label>
+            <label>
+                <span>Tournament end</span>
+                <input type="date" name="tournament_end" value="{{.Dashboard.TournamentEnd}}">
+            </label>
+            <p class="muted">Stats only count games inside this tournament window.</p>
+            <button class="button" type="submit">Save tournament window</button>
+        </form>
+    </article>
+
+    <article class="card admin-card">
         <h2>Stats Display</h2>
         <form class="stack" method="post" action="/admin/stats-config">
             <label>
@@ -356,15 +372,29 @@
         </summary>
         <div class="stack collapse-content">
         {{range .Dashboard.Games}}
-        <article class="fixture-admin" id="game-{{.ID}}">
-            <div class="fixture-grid">
-                <div>
+        {{$game := .}}
+        <details class="card collapse-panel fixture-admin" id="game-{{.ID}}">
+            <summary class="collapse-summary">
+                <span>
                     <div class="match-top">
                         <span class="{{badgeClass .Status}}">{{.Status}}</span>
                         <span>{{gameLabel .GameType}}</span>
                     </div>
-                    <h3>{{.Team1Name}} vs {{.Team2Name}}</h3>
+                    <strong>{{.Team1Name}} vs {{.Team2Name}}</strong>
                     <p class="muted">{{.PlayableDescription}}</p>
+                </span>
+                <span class="muted">
+                    {{if eq .Status "live"}}
+                    {{.Team1Score}} - {{.Team2Score}} at {{.LiveMinute}}'
+                    {{else if eq .Status "played"}}
+                    {{.Team1Score}} - {{.Team2Score}}
+                    {{else}}
+                    {{.ScheduledAt}}
+                    {{end}}
+                </span>
+            </summary>
+            <div class="fixture-grid collapse-content">
+                <div>
                     <p class="muted">Scheduled: {{.ScheduledAt}}</p>
                     {{if eq .Status "live"}}
                     <p><strong>Live:</strong> <span class="score">{{.Team1Score}} - {{.Team2Score}}</span> {{if .LivePaused}}Paused{{else}}at {{.LiveMinute}}'{{end}}</p>
@@ -425,28 +455,59 @@
                         {{if .Team1Player1ID}}
                         <form method="post" action="/admin/games/{{.ID}}/goal">
                             <input type="hidden" name="scorer_id" value="{{.Team1Player1ID}}">
+                            <input type="hidden" name="minute" value="{{.LiveMinute}}">
                             <button class="button button-secondary" type="submit">+ Goal {{.Team1Player1Name}}</button>
                         </form>
                         {{end}}
                         {{if .Team1Player2ID}}
                         <form method="post" action="/admin/games/{{.ID}}/goal">
                             <input type="hidden" name="scorer_id" value="{{.Team1Player2ID}}">
+                            <input type="hidden" name="minute" value="{{.LiveMinute}}">
                             <button class="button button-secondary" type="submit">+ Goal {{.Team1Player2Name}}</button>
                         </form>
                         {{end}}
                         {{if .Team2Player1ID}}
                         <form method="post" action="/admin/games/{{.ID}}/goal">
                             <input type="hidden" name="scorer_id" value="{{.Team2Player1ID}}">
+                            <input type="hidden" name="minute" value="{{.LiveMinute}}">
                             <button class="button button-secondary" type="submit">+ Goal {{.Team2Player1Name}}</button>
                         </form>
                         {{end}}
                         {{if .Team2Player2ID}}
                         <form method="post" action="/admin/games/{{.ID}}/goal">
                             <input type="hidden" name="scorer_id" value="{{.Team2Player2ID}}">
+                            <input type="hidden" name="minute" value="{{.LiveMinute}}">
                             <button class="button button-secondary" type="submit">+ Goal {{.Team2Player2Name}}</button>
                         </form>
                         {{end}}
+                        <form method="post" action="/admin/games/{{.ID}}/goal">
+                            <input type="hidden" name="goal_kind" value="neutral">
+                            <input type="hidden" name="team_id" value="{{.Team1ID}}">
+                            <input type="hidden" name="minute" value="{{.LiveMinute}}">
+                            <button class="button button-secondary" type="submit">+ Own goal for {{.Team1Name}}</button>
+                        </form>
+                        <form method="post" action="/admin/games/{{.ID}}/goal">
+                            <input type="hidden" name="goal_kind" value="neutral">
+                            <input type="hidden" name="team_id" value="{{.Team2ID}}">
+                            <input type="hidden" name="minute" value="{{.LiveMinute}}">
+                            <button class="button button-secondary" type="submit">+ Own goal for {{.Team2Name}}</button>
+                        </form>
                     </div>
+                    {{if .GoalEvents}}
+                    <div class="stack compact">
+                        <p class="muted">Recorded goals</p>
+                        {{range .GoalEvents}}
+                        <form class="player-row" method="post" action="/admin/games/{{$game.ID}}/delete-goal">
+                            <input type="hidden" name="goal_id" value="{{.ID}}">
+                            <div>
+                                <strong>{{.DisplayLabel}}</strong>
+                                <p class="muted">{{.Minute}}' • {{.RecordedAt}}</p>
+                            </div>
+                            <button class="button button-danger" type="submit" data-delete-entity="goal">Delete goal</button>
+                        </form>
+                        {{end}}
+                    </div>
+                    {{end}}
                     <form class="inline-form" method="post" action="/admin/games/{{.ID}}/result">
                         <input type="number" name="team1_score" min="0" value="{{.Team1Score}}" required>
                         <span>-</span>
@@ -461,7 +522,7 @@
                     </form>
                 </div>
             </div>
-        </article>
+        </details>
         {{else}}
         <p class="empty">No games created yet.</p>
         {{end}}
@@ -515,6 +576,27 @@
         {{else}}
         <p class="empty">No admin activity has been logged yet.</p>
         {{end}}
+        </div>
+    </details>
+
+    <details class="card collapse-panel" id="pending-score-approvals">
+        <summary class="collapse-summary">
+            <span>Pending Score Approvals</span>
+            <span class="muted">Risky result and goal deletes need half of approved admins</span>
+        </summary>
+        <div class="stack compact collapse-content">
+            {{range .Dashboard.PendingChanges}}
+            <form class="player-row" method="post" action="/admin/change-requests/{{.ID}}/approve">
+                <div>
+                    <strong>{{.Action}}</strong>
+                    <p class="muted">{{.Details}}</p>
+                    <p class="muted">Requested by {{.RequestedBy}} • {{.Approvals}} / {{.RequiredCount}} approvals • {{.CreatedAt}}</p>
+                </div>
+                <button class="button" type="submit">Approve</button>
+            </form>
+            {{else}}
+            <p class="empty">No pending result or goal approvals.</p>
+            {{end}}
         </div>
     </details>
 </section>
